@@ -1,3 +1,41 @@
 {
-  "blocked_domains": []
+  "financial": {
+    "exact_domains": [
+      "td.com",
+      "rbc.com",
+      "scotiabank.com",
+      "bmo.com",
+      "cibc.com",
+      "paypal.com",
+      "venmo.com",
+      "interac.ca",
+      "cra-arc.gc.ca",
+      "canada.ca",
+      "intuit.com",
+      "turbotax.ca",
+      "wealthsimple.com"
+    ],
+    "patterns": [
+      ".*law\\.com$",
+      ".*legal\\.com$",
+      ".*heerlaw\\.com$"
+    ]
+  },
+  "promotional": {
+    "exact_domains": [
+      "linkedin.com",
+      "facebook.com",
+      "facebookmail.com",
+      "instagram.com",
+      "x.com",
+      "etsy.com",
+      "wix.com",
+      "squarespace.com",
+      "mailchimp.com",
+      "constantcontact.com",
+      "nvidia.com",
+      "jitter.video"
+    ],
+    "patterns": []
+  }
 }
