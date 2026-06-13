@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.session import get_db
 from api.schemas.email import EmailPreview, FilteredPreview
 from api.services.gmail_reader import fetch_recent_emails
 from api.services.sender_blocklist import is_blocked_sender
@@ -18,27 +20,35 @@ async def preview_emails(email: str = Query(description="Authenticated user's em
 
 
 @router.get("/preview-filtered", response_model=FilteredPreview)
-async def preview_filtered(email: str = Query(description="Authenticated user's email address")):
+async def preview_filtered(
+    email: str = Query(description="Authenticated user's email address"),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         emails = fetch_recent_emails(email)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    kept = []
+    allowed = []
     blocked = []
+    unknown = []
 
     for msg in emails:
-        is_blocked, reason, category = is_blocked_sender(msg["sender"])
-        if is_blocked:
+        result = await is_blocked_sender(msg["sender"], db)
+
+        if result.list_status == "blocked":
             blocked.append({
                 "message_id": msg["message_id"],
                 "sender": msg["sender"],
                 "subject": msg["subject"],
                 "date": msg["date"],
-                "reason": reason,
-                "category": category,
+                "reason": result.reason,
+                "category": result.category,
+                "list_status": result.list_status,
             })
+        elif result.list_status == "allowed":
+            allowed.append(msg)
         else:
-            kept.append(msg)
+            unknown.append(msg)
 
-    return {"kept": kept, "blocked": blocked}
+    return {"allowed": allowed, "blocked": blocked, "unknown": unknown}

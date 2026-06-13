@@ -15,9 +15,11 @@ class BlockedEmail(BaseModel):
     subject: str
     date: str
     reason: str
-    category: str
+    category: str | None
+    list_status: str
 
 
 class FilteredPreview(BaseModel):
-    kept: list[EmailPreview]
+    allowed: list[EmailPreview]
     blocked: list[BlockedEmail]
+    unknown: list[EmailPreview]

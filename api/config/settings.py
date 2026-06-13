@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
+    database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
 
     model_config = {"env_file": ".env", "extra": "ignore"}

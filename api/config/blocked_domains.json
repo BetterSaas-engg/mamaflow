@@ -1,4 +1,5 @@
 {
+  "_deprecated": "This file is no longer used at runtime. Blocklist data now lives in PostgreSQL sender_blocklist table. See api/db/seed.py for the canonical seed data.",
   "financial": {
     "exact_domains": [
       "td.com",
