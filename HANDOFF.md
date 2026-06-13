@@ -7,7 +7,7 @@
 
 ## What Mamaflow Does
 
-Mamaflow connects to a parent's Gmail, reads family-related emails (school, doctors, activities, playdates), and extracts structured calendar events using Claude. It filters noise, redacts PII, defends against prompt injection, and returns clean JSON.
+Mamaflow connects to a parent's Gmail, reads family-related emails (school, doctors, activities, playdates), and extracts structured calendar events **and action items** using Claude. It filters noise, redacts PII, defends against prompt injection, and returns clean JSON.
 
 ---
 
@@ -18,7 +18,7 @@ Gmail OAuth → fetch_recent_emails (last 30 days, max 50)
   → Layer 1: Sender blocklist (PostgreSQL — allowlist wins, then blocklist, then unknown passes through)
   → Layer 2: Presidio PII redaction (credit cards, bank accounts, SSNs, IBANs, Canadian SINs)
   → Layer 3: Nonce-tagged prompt injection wrapper (randomized delimiters + Unicode escaping)
-  → Claude Sonnet 4.6 extraction → structured FamilyEvent JSON
+  → Claude Sonnet 4.6 extraction → structured FamilyItem JSON (events + actions)
 ```
 
 ---
@@ -32,7 +32,58 @@ Gmail OAuth → fetch_recent_emails (last 30 days, max 50)
 | GET | `/api/v1/auth/google/callback` | OAuth callback |
 | GET | `/api/v1/sync/preview?email=` | Raw email list (no filtering) |
 | GET | `/api/v1/sync/preview-filtered?email=` | Emails sorted into allowed/blocked/unknown with PII redaction |
-| GET | `/api/v1/sync/extract?email=` | Full pipeline — returns structured FamilyEvent JSON per email |
+| GET | `/api/v1/sync/extract?email=` | Full pipeline — returns structured events + actions per email |
+
+---
+
+## Extraction Schema (FamilyItem)
+
+Each extracted item is either an **event** (has a date/time) or a standalone **action** (a to-do with no date):
+
+```json
+{
+  "item_type": "event | action",
+  "event_title": "Charlie's appointment at Grandview",
+  "action_required": "Call Grandview to confirm before June 19",
+  "date": "2026-06-19",
+  "time": "10:00 AM",
+  "location": "Grandview Medical Centre",
+  "child_name": "Charlie",
+  "event_type": "medical",
+  "source_sender": "reception@grandview.ca",
+  "source_email_link": "https://mail.google.com/mail/u/0/#inbox/19abc123"
+}
+```
+
+- **item_type "event"**: has a date/time. May also carry `action_required` (e.g. "RSVP by Friday").
+- **item_type "action"**: standalone to-do with no date (e.g. a registration link). `event_title` may be null.
+- **source_email_link**: Gmail deep link, stamped server-side from `message_id` — never from Claude output.
+- **additionalProperties: false** enforced — locked schema doubles as injection defense.
+
+---
+
+## Privacy Posture
+
+The pipeline makes a deliberate distinction between **harm-class PII** (always redacted) and **contextual PII** (preserved by design):
+
+**Always redacted (Layer 2 — Presidio):**
+- Credit card numbers
+- Bank account numbers (US + IBAN)
+- Social Security numbers (US SSN)
+- Social Insurance numbers (Canadian SIN)
+- Generic account-number patterns (`Account #: 12345678`)
+
+**Intentionally preserved:**
+- Phone numbers — needed in school/doctor contacts ("call the office at 416-555-1234")
+- Dates of birth — needed for age-appropriate event context
+- Names — needed for child attribution (`child_name` field)
+- Addresses — needed for event locations
+
+**Structural defenses (no PII reaches the wrong layer):**
+- Financial sender domains blocked at Layer 1 *before the email body is ever fetched*
+- Raw email body is never stored in the database (processed in-memory only)
+- OAuth tokens never stored in the database (in-memory for Phase 0, Secret Manager for prod)
+- All content wrapped in nonce-tagged boundaries before Claude sees it (Layer 3)
 
 ---
 
@@ -59,7 +110,7 @@ api/
 ├── schemas/
 │   ├── email.py                    # EmailPreview, BlockedEmail, FilteredPreview, ExtractionPreview
 │   ├── blocklist.py                # BlocklistResult (allowed/blocked/unknown)
-│   └── family_event.py             # FamilyEvent + ExtractionResponse (locked output schema)
+│   └── family_event.py             # FamilyItem (event|action) + ExtractionResponse (locked output schema)
 └── services/
     ├── gmail_reader.py             # Gmail API client, fetches last 30 days
     ├── sender_blocklist.py         # Layer 1 — async DB queries (allowlist → blocklist → unknown)
@@ -135,6 +186,8 @@ See `CLAUDE.md` for the full architecture and decision log.
 ## Commit History
 
 ```
+3a8e695 feat: extract action items alongside events from emails
+7408080 docs: add developer handoff for Phase 0
 e7a041a feat: Claude extraction endpoint — full pipeline end-to-end
 c5f28e2 feat: wrap-by-default prompt injection defense (Layer 3)
 f071da1 feat: Presidio PII redaction (Layer 2 of privacy pipeline)
