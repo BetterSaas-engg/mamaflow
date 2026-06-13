@@ -91,7 +91,7 @@ async def extract_emails(
             continue
 
         redaction = redact_pii(msg.get("body", ""))
-        extraction = extract_events(redaction.redacted_text, msg["subject"], msg["sender"])
+        extraction = extract_events(redaction.redacted_text, msg["subject"], msg["sender"], msg["message_id"])
 
         entry = {
             "message_id": msg["message_id"],

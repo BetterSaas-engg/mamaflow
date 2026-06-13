@@ -21,10 +21,14 @@ _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 _log = logging.getLogger(__name__)
 
 
+_GMAIL_LINK_TEMPLATE = "https://mail.google.com/mail/u/0/#inbox/{message_id}"
+
+
 def extract_events(
     email_body: str,
     email_subject: str,
     sender: str,
+    message_id: str = "",
 ) -> ExtractionResponse:
     """Run the full extraction pipeline on a single email.
 
@@ -32,6 +36,7 @@ def extract_events(
     2. Build extraction prompt with locked JSON schema
     3. Call Claude API
     4. Parse JSON response into ExtractionResponse
+    5. Stamp source_email_link on each item (built from message_id)
     """
     wrapped, nonce = wrap_untrusted_content(email_body, email_subject, sender)
     prompt = build_extraction_prompt(wrapped, nonce)
@@ -46,7 +51,15 @@ def extract_events(
 
     try:
         data = json.loads(raw_text)
-        return ExtractionResponse.model_validate(data)
+        result = ExtractionResponse.model_validate(data)
     except (json.JSONDecodeError, Exception) as e:
         _log.warning("Failed to parse Claude response: %s — raw: %s", e, raw_text[:200])
         return ExtractionResponse(events=[])
+
+    # Stamp the Gmail deep link — built server-side, never from Claude output
+    if message_id:
+        link = _GMAIL_LINK_TEMPLATE.format(message_id=message_id)
+        for item in result.events:
+            item.source_email_link = link
+
+    return result
