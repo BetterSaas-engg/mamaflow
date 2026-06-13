@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.session import get_db
 from api.schemas.email import EmailPreview, FilteredPreview
 from api.services.gmail_reader import fetch_recent_emails
+from api.services.privacy_pipeline import redact_pii
 from api.services.sender_blocklist import is_blocked_sender
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
@@ -47,8 +48,10 @@ async def preview_filtered(
                 "list_status": result.list_status,
             })
         elif result.list_status == "allowed":
-            allowed.append(msg)
+            redaction = redact_pii(msg.get("body", ""))
+            allowed.append({**msg, "body": redaction.redacted_text, "pii_redacted": redaction.entities_found})
         else:
-            unknown.append(msg)
+            redaction = redact_pii(msg.get("body", ""))
+            unknown.append({**msg, "body": redaction.redacted_text, "pii_redacted": redaction.entities_found})
 
     return {"allowed": allowed, "blocked": blocked, "unknown": unknown}

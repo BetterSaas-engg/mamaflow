@@ -7,6 +7,7 @@ class EmailPreview(BaseModel):
     subject: str
     date: str
     body: str
+    pii_redacted: int = 0
 
 
 class BlockedEmail(BaseModel):
