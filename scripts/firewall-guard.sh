@@ -46,7 +46,7 @@ for f in $files; do
   # 3. Ad-layer files must not touch content/event/child data.
   #    Heuristic: file path is in an ad area AND references event/child/extraction identifiers.
   case "$f" in
-    *ad/*|*ads/*|*advert*|*Ad.tsx|*Ads.tsx|*ad_*.py|*_ads.py)
+    *ad/*|*ads/*|*advert*|*Ad.tsx|*Ads.tsx|*ad_*.py|*_ads.py|*_ad.dart|*ad_*.dart|*Ad.dart|*_ads.dart)
       if grep -nEi '\b(event|child|extraction|email_body|email_content|category)\b' "$f" >/dev/null 2>&1; then
         echo "${RED}BLOCK${NC} $f is in the ad layer but references content/event/child data. Firewall violation."
         grep -nEi '\b(event|child|extraction|email_body|email_content|category)\b' "$f" | sed 's/^/      /'
