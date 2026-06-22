@@ -8,6 +8,7 @@ class ApiClient {
   final Future<String?> Function() _jwtProvider;
 
   ApiClient(this._dio, {required Future<String?> Function() jwtProvider})
+      // ignore: prefer_initializing_formals — public named param maps to a private field
       : _jwtProvider = jwtProvider {
     _dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) async {
       final jwt = await _jwtProvider();
