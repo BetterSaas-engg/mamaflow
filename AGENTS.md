@@ -48,8 +48,8 @@ Launch ads = in-house/static and/or AdMob non-personalized (npa=1). Personalized
 
 - Python: FastAPI, SQLAlchemy, Pydantic v2, Alembic. Async where it matters. Type hints.
 - Models use UUID PKs and TIMESTAMPTZ in UTC.
-- Frontend: React + Vite + Tailwind, thin API consumer. **Delivery platform is under review**
-  (PWA+Capacitor vs React Native/Expo vs Flutter) — see DECISIONS.md (D9/D20).
+- Frontend: **Flutter** (Dart), mobile-first iOS + Android; web later via Flutter Web. Thin REST/JSON
+  consumer of the API. See DECISIONS.md (D9/D22/D23).
 - Claude extraction: force valid JSON via tool-use / structured output; parse defensively.
   Use a current model string (verify against docs); do not hardcode the old 2025 Sonnet id.
 - Small, clean commits with clear messages. One step at a time. Don't scaffold features
