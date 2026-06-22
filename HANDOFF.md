@@ -16,10 +16,14 @@
 
 > **Update 2026-06-22 — Frontend platform decided: Flutter.** Mobile-first (iOS + Android), web later;
 > push via FCM; mobile Google OAuth (tokens stay server-side). Supersedes D9/D20 (decision-log flip +
-> D22/D23 pending in implementation). Design:
+> D22/D23 done). Design:
 > `docs/superpowers/specs/2026-06-22-frontend-platform-flutter-design.md`. **Backend team:** the
 > required API contract + changes are in `docs/backend-requirements-from-frontend.md`. Frontend work
-> on branch `feat/frontend-flutter`.
+> on branch `feat/frontend-flutter` (pushed). **Phase 0** (D9/D20→Flutter + D22/D23; firewall-guard
+> Dart patterns) and **Phase 1** (Flutter app foundation: `frontend/` scaffold + api_client / auth /
+> isolated ads / push / app-shell; 7 tests pass; `flutter analyze` clean) are **done**. **Phase 2**
+> (on-device Firebase/FCM, Google sign-in, AdMob, wired to the backend endpoints) is pending accounts
+> + backend. Plan: `docs/superpowers/plans/2026-06-22-frontend-flutter-foundation.md`.
 
 ---
 
