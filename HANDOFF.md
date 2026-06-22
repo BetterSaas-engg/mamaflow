@@ -89,8 +89,13 @@ The pipeline makes a deliberate distinction between **harm-class PII** (always r
 
 ## File Map
 
+> Restructured 2026-06-22: all backend code now lives under `backend/` (package still `api`, imports
+> unchanged). Run all commands from `backend/`. `backend/` also holds `alembic/`, `alembic.ini`,
+> `requirements.txt`, `tests/`, `.env.example`. AI-assistant config + firewall guard live at the repo
+> root (`AGENTS.md`, `.claude/`, `.agents/`, `scripts/`, `.githooks/`; see `AI-SETUP.md`).
+
 ```
-api/
+backend/api/
 ├── main.py                         # FastAPI app + lifespan
 ├── auth/
 │   ├── oauth.py                    # Google OAuth with PKCE
@@ -118,12 +123,12 @@ api/
     ├── content_wrapper.py          # Layer 3 — Nonce-delimited injection defense + extraction prompt
     └── ai_extractor.py             # Claude Sonnet 4.6 API call + JSON parsing
 
-alembic/
+backend/alembic/
 ├── env.py                          # Async migration runner
 └── versions/
     └── f11c1892443a_create_sender_allowlist_and_sender_.py
 
-tests/
+backend/tests/
 └── test_content_wrapper.py         # 7 security tests for prompt injection defense
 ```
 
@@ -131,11 +136,11 @@ tests/
 
 ## Environment Setup
 
-1. Copy `.env.example` to `.env` and fill in real values:
+1. Copy `backend/.env.example` to `backend/.env` and fill in real values:
    - `DATABASE_URL` — Railway PostgreSQL connection string (standard `postgresql://` prefix; the app converts to `postgresql+asyncpg://` at runtime)
    - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — GCP OAuth 2.0 credentials with Gmail readonly scope
    - `ANTHROPIC_API_KEY` — Anthropic API key for Claude Sonnet 4.6
-2. `pip install -r requirements.txt`
+2. `cd backend && pip install -r requirements.txt` — run all commands below from `backend/`
 3. `python -m alembic upgrade head` — creates sender_allowlist and sender_blocklist tables
 4. `python -m api.db.seed` — inserts 27 default blocklist rows (idempotent)
 5. `uvicorn api.main:app --reload` — starts the server on port 8000

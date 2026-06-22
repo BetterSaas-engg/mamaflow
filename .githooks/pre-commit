@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Universal firewall backstop. Runs regardless of which tool (or human) wrote the code.
+# Install once:  git config core.hooksPath .githooks
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+bash scripts/firewall-guard.sh $staged

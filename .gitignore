@@ -1,7 +1,12 @@
 # Environment
 .env
-.env.local
-.env.production
+.env.*
+!**/.env.example
+
+# AI assistant: personal/local overrides (do NOT commit)
+.claude/settings.local.json
+CLAUDE.local.md
+*.local.md
 
 # Python
 __pycache__/
@@ -26,15 +31,18 @@ env/
 .DS_Store
 Thumbs.db
 
-# Node (PWA — Phase 2)
+# Node / frontend (platform TBD — see DECISIONS.md; add framework-specific ignores when chosen)
 node_modules/
-pwa/dist/
 
-# Secrets
+# Secrets (also blocked by firewall-guard) — artifact-scoped, NOT a broad *token* (keeps token_store.py)
 *.pem
 *.key
+*.token
 credentials.json
 token.json
+**/credentials.json
+**/token.json
+**/secrets/
 
 # Terraform
 *.tfstate
