@@ -14,6 +14,13 @@
 > `cd backend && python -m pytest` → **7 passed**. Tracked on branch `chore/ai-assistant-setup`
 > (pushed to origin; not merged to main). See `AI-SETUP.md`.
 
+> **Update 2026-06-22 — Frontend platform decided: Flutter.** Mobile-first (iOS + Android), web later;
+> push via FCM; mobile Google OAuth (tokens stay server-side). Supersedes D9/D20 (decision-log flip +
+> D22/D23 pending in implementation). Design:
+> `docs/superpowers/specs/2026-06-22-frontend-platform-flutter-design.md`. **Backend team:** the
+> required API contract + changes are in `docs/backend-requirements-from-frontend.md`. Frontend work
+> on branch `feat/frontend-flutter`.
+
 ---
 
 ## What Mamaflow Does
