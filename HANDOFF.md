@@ -3,6 +3,17 @@
 **Date:** 2026-06-13
 **Status:** Phase 0 complete. End-to-end pipeline verified against a live Gmail inbox.
 
+> **Update 2026-06-22 — AI-assistant setup + repo restructure.** All backend code now lives under
+> `backend/` (package still `api`, imports unchanged; run commands from `backend/`). AI-assistant
+> scaffolding installed at the repo root: `AGENTS.md` (canonical, cross-tool), `CLAUDE.md`/`GEMINI.md`,
+> `.claude/` + `.agents/`, and the deterministic firewall (`scripts/firewall-guard.sh` wired as a
+> Claude PostToolUse hook + `.githooks/pre-commit` backstop). Added 4 project skills
+> (firewall-privacy-audit, testing, code-maintainability-audit, db-migrations) and `DECISIONS.md`
+> (D1–D21; **D9/D20 frontend platform under review** — PWA+Capacitor vs Expo vs Flutter). Memory model:
+> docs + discipline (manual) — update this file after each step. Verified in a venv:
+> `cd backend && python -m pytest` → **7 passed**. Tracked on branch `chore/ai-assistant-setup`
+> (pushed to origin; not merged to main). See `AI-SETUP.md`.
+
 ---
 
 ## What Mamaflow Does
