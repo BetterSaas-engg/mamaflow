@@ -3,6 +3,14 @@ from pydantic import BaseModel
 from api.schemas.family_event import FamilyEvent
 
 
+class EmailMetadata(BaseModel):
+    message_id: str
+    sender: str
+    subject: str
+    date: str
+    list_status: str = "unknown"
+
+
 class EmailPreview(BaseModel):
     message_id: str
     sender: str
@@ -42,3 +50,10 @@ class ExtractionPreview(BaseModel):
     blocked: list[BlockedEmail]
     unknown: list[EmailExtraction]
     total_events: int
+
+
+class SyncResult(BaseModel):
+    messages_scanned: int
+    blocked: int
+    processed: int
+    items_created: int
