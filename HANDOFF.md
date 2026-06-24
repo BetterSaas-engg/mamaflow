@@ -25,6 +25,25 @@
 > (on-device Firebase/FCM, Google sign-in, AdMob, wired to the backend endpoints) is pending accounts
 > + backend. Plan: `docs/superpowers/plans/2026-06-22-frontend-flutter-foundation.md`.
 
+> **Update 2026-06-23 — Backend Phase 1 (frontend integration) A–D done.** Built the API contract the
+> Flutter app needs (`docs/backend-requirements-from-frontend.md`), TDD, on branch
+> `feat/backend-mobile-integration`. **44 tests pass.** New env in `backend/.env` (real Railway/Google/
+> Anthropic + a generated `SECRET_KEY`; gitignored). Commits: A `88a9317`, B `f6a59ed`, C `9663ab7`,
+> D `de9614c`.
+> - **A (auth):** `User` model; JWT issue/verify + `get_current_user` Bearer dependency;
+>   `POST /api/v1/auth/google/mobile` (serverAuthCode → Gmail tokens server-side D4 → app JWT D23).
+> - **B (items):** single `items` table (D24); `persist_items` (idempotent per message);
+>   `GET /api/v1/items?from&to&type`, `PATCH /api/v1/items/{id}` {status open/done/dismissed, D25}.
+> - **C (hardening):** all sync endpoints JWT-gated, `?email=` dropped; **metadata-first Gmail fetch**
+>   (blocked senders' bodies never pulled — fixes the long-standing gap); `POST /api/v1/sync`
+>   (fetch→blocklist→redact→extract→persist); blocking I/O moved off the loop via `asyncio.to_thread`.
+> - **D (push):** `Device` model + `POST /api/v1/devices/register` (de-dupe by fcm_token). FCM sender +
+>   APScheduler reminder job DEFERRED until Firebase service account + APNs key exist (D26/D27).
+> - **Migrations:** 3 new (users `105f5ff0fdeb`, items `b2c1d0e9f8a7`, devices `c3d2e1f0a9b8`), verified
+>   as valid Postgres DDL offline. **NOT yet applied to the shared Railway DB** — run
+>   `cd backend && python -m alembic upgrade head` (Claude was blocked from writing the shared DB).
+> - Security-audited (Phase A, B clean; C/D audit run). Test DB = in-memory SQLite (`tests/conftest.py`).
+
 ---
 
 ## What Mamaflow Does

@@ -20,6 +20,10 @@
 | D21 | Monetization: free + firewalled ads PLUS a paid ad-free tier (Cozi model) | locked | Launch ads = in-house/static and/or AdMob non-personalized (`npa=1`). Personalized AdMob deferred. Ads stay firewalled per D19. |
 | D22 | Push notifications via Firebase Cloud Messaging (FCM) for both platforms | locked | iOS via an APNs key in Firebase. Backend sends with the FCM HTTP v1 API. |
 | D23 | Mobile auth = Google sign-in serverAuthCode → backend token exchange | locked | Gmail tokens stay server-side (D4); app holds only its session JWT. |
+| D24 | Extracted items persist in a SINGLE `items` table (events + actions via `item_type`) | locked | Matches the unified FamilyItem schema; simplest `GET /items` query. Single table over split events/actions. (Phase B) |
+| D25 | Item todo status = `open`/`done`/`dismissed` (MVP); snooze deferred | locked | Keeps `PATCH /items/{id}` MVP-small; snooze lands later with the reminder scheduler. |
+| D26 | Reminder scheduling via in-process **APScheduler** (when the FCM sender is built) | deferred | Simplest for a single Railway instance; revisit a task queue at scale. The sender itself is deferred (D27). |
+| D27 | Device-registration endpoint built now; **FCM push sender + scheduler deferred** until a Firebase service account + APNs key exist | deferred | Unblocks the app's token registration without blocking on push infra/accounts. |
 
 *(D6–D8, D10–D12, D15–D18 are unallocated in the original log; add them here if/when they surface.)*
 
