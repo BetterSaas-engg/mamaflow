@@ -1,4 +1,7 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
+
+_WEAK_SECRETS = {"", "dev-secret-key", "your-jwt-secret-key"}
 
 
 class Settings(BaseSettings):
@@ -13,6 +16,15 @@ class Settings(BaseSettings):
     environment: str = "development"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _require_strong_secret_outside_dev(self) -> "Settings":
+        # JWTs signed with a placeholder secret are trivially forgeable.
+        if self.environment != "development" and self.secret_key in _WEAK_SECRETS:
+            raise ValueError(
+                "SECRET_KEY must be set to a strong value when ENVIRONMENT != development"
+            )
+        return self
 
 
 settings = Settings()
