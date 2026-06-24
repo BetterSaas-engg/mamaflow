@@ -30,6 +30,11 @@ async def test_preview_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_preview_filtered_requires_auth(client):
+    resp = await client.get("/api/v1/sync/preview-filtered")
+    assert resp.status_code == 401
+
+
 async def test_sync_requires_auth(client):
     resp = await client.post("/api/v1/sync")
     assert resp.status_code == 401

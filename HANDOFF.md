@@ -42,7 +42,10 @@
 > - **Migrations:** 3 new (users `105f5ff0fdeb`, items `b2c1d0e9f8a7`, devices `c3d2e1f0a9b8`), verified
 >   as valid Postgres DDL offline. **NOT yet applied to the shared Railway DB** — run
 >   `cd backend && python -m alembic upgrade head` (Claude was blocked from writing the shared DB).
-> - Security-audited (Phase A, B clean; C/D audit run). Test DB = in-memory SQLite (`tests/conftest.py`).
+> - Security-audited (A, B, C, D — no BLOCKs). Test DB = in-memory SQLite (`tests/conftest.py`).
+>   Tracked from the C/D audit for the FCM-sender phase: device re-registration reassigns `user_id`
+>   by `fcm_token` ("last registration wins" — required for device-switch; residual low-impact hijack
+>   risk, inert until pushes are sent — see `services/devices.py` docstring).
 
 ---
 
