@@ -14,6 +14,11 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final items = ref.watch(itemsProvider);
     return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.sync),
+        label: const Text('Sync inbox'),
+        onPressed: () => _sync(context, ref),
+      ),
       appBar: AppBar(
         title: const Text('Mamaflow'),
         actions: [
@@ -48,6 +53,18 @@ class HomeScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _sync(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text('Syncing inbox…')));
+    try {
+      final created = await ref.read(syncServiceProvider).run();
+      await ref.read(itemsProvider.notifier).refresh();
+      messenger.showSnackBar(SnackBar(content: Text('Synced — $created new item(s)')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('Sync failed. Try again.')));
+    }
   }
 
   // A scrollable so pull-to-refresh works even when there are no items.
