@@ -28,4 +28,9 @@ class ApiClient {
     final r = await _dio.post(path, data: body);
     return Map<String, dynamic>.from(r.data as Map);
   }
+
+  Future<Map<String, dynamic>> patchJson(String path, Map<String, dynamic> body) async {
+    final r = await _dio.patch(path, data: body);
+    return Map<String, dynamic>.from(r.data as Map);
+  }
 }
