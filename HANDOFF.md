@@ -47,6 +47,21 @@
 >   by `fcm_token` ("last registration wins" — required for device-switch; residual low-impact hijack
 >   risk, inert until pushes are sent — see `services/devices.py` docstring).
 
+> **Update 2026-06-24 — Frontend mobile sign-in wired to the backend.** Flutter app now does the
+> D23 flow: `google_sign_in` 7.x → serverAuthCode → `POST /api/v1/auth/google/mobile` → store the
+> app JWT (secure storage; Gmail tokens stay server-side, D4). New: `auth/google_auth_codes.dart`
+> (plugin boundary, testable), `auth/auth_service.dart`, `auth/session_controller.dart`,
+> `ui/sign_in_screen.dart` + `ui/home_screen.dart`; `app.dart` gates on session via `AuthGate`;
+> `ProviderScope` moved to `main.dart`. **`flutter analyze` clean; 13 tests pass.**
+> **Native config still required before a real device sign-in works** (console/Xcode, not code):
+> 1. **Build-time:** `--dart-define=GOOGLE_SERVER_CLIENT_ID=<WEB OAuth client id>` and
+>    `--dart-define=API_BASE_URL=<backend url>`.
+> 2. **iOS:** create an iOS OAuth client; set `GIDClientID` (iOS client id) + add its reversed-client-id
+>    as a URL scheme in `ios/Runner/Info.plist`.
+> 3. **Android:** register the app's SHA-1 against an Android OAuth client in the same GCP project.
+> 4. Confirm the backend `exchange_server_auth_code` `redirect_uri` against the real client (often
+>    `''`/`postmessage` for the offline-code flow) on the first device test.
+
 ---
 
 ## What Mamaflow Does
