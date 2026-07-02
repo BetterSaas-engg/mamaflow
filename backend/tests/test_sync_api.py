@@ -59,7 +59,7 @@ async def test_sync_persists_items_and_never_fetches_blocked_bodies(client, db, 
 
     monkeypatch.setattr(sync_router, "fetch_message_bodies", fake_bodies)
 
-    def fake_extract(body, subject, sender, message_id=""):
+    def fake_extract(body, subject, sender, message_id="", email_date=""):
         return ExtractionResponse(
             events=[FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")]
         )
@@ -89,7 +89,7 @@ async def test_sync_is_idempotent_on_resync(client, db, monkeypatch):
     monkeypatch.setattr(sync_router, "fetch_message_bodies", lambda email, ids: {i: "b" for i in ids})
     monkeypatch.setattr(
         sync_router, "extract_events",
-        lambda body, subject, sender, message_id="": ExtractionResponse(
+        lambda body, subject, sender, message_id="", email_date="": ExtractionResponse(
             events=[FamilyItem(item_type="event", event_title="X")]
         ),
     )

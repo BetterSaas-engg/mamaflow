@@ -106,7 +106,12 @@ async def extract_emails(
     for msg, status in passed:
         redaction = redact_pii(bodies.get(msg["message_id"], ""))
         extraction = await asyncio.to_thread(
-            extract_events, redaction.redacted_text, msg["subject"], msg["sender"], msg["message_id"]
+            extract_events,
+            redaction.redacted_text,
+            msg["subject"],
+            msg["sender"],
+            msg["message_id"],
+            msg["date"],
         )
         entry = {
             "message_id": msg["message_id"],
@@ -146,7 +151,12 @@ async def run_sync(
     for msg, _status in passed:
         redaction = redact_pii(bodies.get(msg["message_id"], ""))
         extraction = await asyncio.to_thread(
-            extract_events, redaction.redacted_text, msg["subject"], msg["sender"], msg["message_id"]
+            extract_events,
+            redaction.redacted_text,
+            msg["subject"],
+            msg["sender"],
+            msg["message_id"],
+            msg["date"],
         )
         saved = await persist_items(db, user, msg["message_id"], extraction.events)
         items_created += len(saved)

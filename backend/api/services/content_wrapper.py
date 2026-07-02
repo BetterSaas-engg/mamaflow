@@ -60,8 +60,12 @@ def wrap_untrusted_content(
     email_body: str,
     email_subject: str,
     sender: str,
+    email_date: str = "",
 ) -> tuple[str, str]:
     """Wrap an email in nonce-delimited boundaries.
+
+    email_date is the message's Date header — it gives the model the reference
+    point to resolve relative/yearless dates ("this Saturday") into ISO dates.
 
     Returns (wrapped_content, nonce) — the nonce is needed by
     build_extraction_prompt to reference the exact boundaries.
@@ -69,10 +73,12 @@ def wrap_untrusted_content(
     nonce = secrets.token_hex(16)
     safe_body = _escape_delimiters(email_body)
     safe_subject = _escape_delimiters(email_subject)
+    safe_date = _escape_delimiters(email_date)
 
     wrapped = (
         f"<<<UNTRUSTED_EMAIL_{nonce}>>>\n"
         f"From: {sender}\n"
+        f"Date: {safe_date}\n"
         f"Subject: {safe_subject}\n"
         f"Body:\n{safe_body}\n"
         f"<<<END_UNTRUSTED_EMAIL_{nonce}>>>"
@@ -146,6 +152,12 @@ Schema:
 item_type must be "event" or "action".
 event_type must be one of: school, medical, sports, playdate, camp, \
 birthday, recital, other, or null.
+date must be ISO format YYYY-MM-DD (e.g. "2026-07-05") — NEVER prose like \
+"July 5th" or "this Saturday". Use the email's Date header to resolve \
+relative or yearless dates (e.g. "this Saturday" relative to when the \
+email was sent; a yearless date means the next occurrence). If you cannot \
+determine a concrete calendar date, set date to null. Put times in the \
+time field (e.g. "10:00 AM"), never in date.
 source_email_link will be populated by the system — always set it to null.
 
 ## EMAIL DATA
