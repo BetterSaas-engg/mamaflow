@@ -47,6 +47,29 @@
 >   by `fcm_token` ("last registration wins" — required for device-switch; residual low-impact hijack
 >   risk, inert until pushes are sent — see `services/devices.py` docstring).
 
+> **Update 2026-07-02 — E2E VERIFIED ON A REAL iPHONE.** Full loop working on device: Google
+> sign-in → Gmail fetch (metadata-first) → blocklist → Presidio → Claude → Railway Postgres →
+> app list (sync idempotent; done/dismiss working). Migrations applied to Railway (head
+> `c3d2e1f0a9b8`). Root `README.md` added (setup + run-on-device instructions).
+> - **D28 pivot:** mobile sign-in is now direct OAuth2 auth-code + **PKCE** via flutter_web_auth_2
+>   (google_sign_in 7.x cannot mint a Gmail-scoped serverAuthCode on iOS — verified in plugin
+>   source). Backend `POST /auth/google/mobile` takes `{code, code_verifier}`; redirect_uri derived
+>   server-side; new env `GOOGLE_IOS_CLIENT_ID`. PKCE flow security-audited (no BLOCKs; findings
+>   fixed in 829bb67).
+> - iOS config: deployment target 15.0 (Firebase SPM); Info.plist has GIDClientID + reversed-id URL
+>   scheme + GADApplicationIdentifier (Google TEST id — replace before release) + dev-only ATS.
+> - **Known issues (next up):**
+>   1. Extraction returns inconsistent `date` formats ("July 5th (Saturday)" vs "2026-06-10") —
+>      breaks the ISO-string date-range filter on GET /items; tighten the extraction prompt to force
+>      YYYY-MM-DD (touches the locked prompt → own TDD pass + security audit).
+>   2. App JWT expires in 15 min with no refresh/auto-signout — add a 401 interceptor (clear JWT →
+>      sign-in screen) or a refresh flow.
+>   3. Gmail tokens in-memory — backend restart loses them (re-sign-in required); Secret Manager is
+>      the Phase-1 fix.
+>   4. Sync is synchronous on the request path (~50 Claude calls worst case) — background processing
+>      still pending (Phase 1 list).
+> - Branch `feat/backend-mobile-integration` (about 17 commits) NOT yet pushed/PR'd.
+
 > **Update 2026-06-24 — Frontend mobile sign-in wired to the backend.** Flutter app now does the
 > D23 flow: `google_sign_in` 7.x → serverAuthCode → `POST /api/v1/auth/google/mobile` → store the
 > app JWT (secure storage; Gmail tokens stay server-side, D4). New: `auth/google_auth_codes.dart`
