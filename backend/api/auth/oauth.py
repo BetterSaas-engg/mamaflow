@@ -83,11 +83,23 @@ async def google_callback(request: Request):
     }
 
 
-# --- Mobile auth (D23): google_sign_in serverAuthCode -> backend token exchange ---
+# --- Mobile auth (D23): OAuth 2.0 authorization-code + PKCE ---
+#
+# The app runs the OAuth consent directly (flutter_web_auth_2), obtaining an
+# authorization code with a PKCE verifier, and posts {code, code_verifier,
+# redirect_uri} here. The backend exchanges them with the iOS OAuth client id
+# and the PKCE verifier — installed-app clients have NO secret. Gmail tokens
+# stay server-side (D4); identity comes from the verified id_token, never the
+# client. (google_sign_in's serverAuthCode can't cover an added scope like Gmail
+# on iOS — see DECISIONS.)
+
+_GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
 class MobileAuthRequest(BaseModel):
-    server_auth_code: str
+    code: str
+    code_verifier: str
+    redirect_uri: str
 
 
 class MobileAuthUser(BaseModel):
@@ -102,34 +114,47 @@ class MobileAuthResponse(BaseModel):
     user: MobileAuthUser
 
 
-def exchange_server_auth_code(server_auth_code: str) -> tuple[dict, str]:
-    """Exchange a mobile serverAuthCode for Gmail tokens; return (creds, email).
+async def exchange_code_pkce(
+    code: str,
+    code_verifier: str,
+    redirect_uri: str,
+) -> tuple[dict, str]:
+    """Exchange a PKCE authorization code for Gmail tokens; return (creds, email).
 
-    Identity is taken from the verified id_token, never trusted from the client.
-    Note: for the google_sign_in offline-code flow the redirect_uri Google expects
-    can differ from the web callback (often '' / 'postmessage') — verify against the
-    real iOS/Android client during integration.
+    Uses the iOS client id + PKCE verifier (no client secret). Identity is taken
+    from the verified id_token, never trusted from the client.
     """
+    import httpx
     from google.auth.transport.requests import Request as GoogleRequest
     from google.oauth2 import id_token
 
-    flow = _build_flow()
-    flow.fetch_token(code=server_auth_code)
-    credentials = flow.credentials
+    async with httpx.AsyncClient(timeout=15) as http:
+        resp = await http.post(
+            _GOOGLE_TOKEN_URI,
+            data={
+                "client_id": settings.google_ios_client_id,
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+    resp.raise_for_status()
+    tokens = resp.json()
 
     id_info = id_token.verify_oauth2_token(
-        credentials.id_token,
+        tokens["id_token"],
         GoogleRequest(),
-        settings.google_client_id,
+        settings.google_ios_client_id,
     )
 
     creds_data = {
-        "token": credentials.token,
-        "refresh_token": credentials.refresh_token,
-        "token_uri": credentials.token_uri,
-        "client_id": credentials.client_id,
-        "client_secret": credentials.client_secret,
-        "scopes": list(credentials.scopes),
+        "token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
+        "token_uri": _GOOGLE_TOKEN_URI,
+        "client_id": settings.google_ios_client_id,
+        "client_secret": None,
+        "scopes": (tokens.get("scope") or "").split(),
     }
     return creds_data, id_info["email"]
 
@@ -139,10 +164,12 @@ async def google_mobile_auth(
     payload: MobileAuthRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Mobile sign-in: exchange serverAuthCode -> Gmail tokens (kept server-side,
-    D4) -> find/create the User -> issue an app session JWT (D23)."""
+    """Mobile sign-in: exchange PKCE code -> Gmail tokens (kept server-side, D4)
+    -> find/create the User -> issue an app session JWT (D23)."""
     try:
-        creds_data, email = exchange_server_auth_code(payload.server_auth_code)
+        creds_data, email = await exchange_code_pkce(
+            payload.code, payload.code_verifier, payload.redirect_uri
+        )
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid authorization code")
 

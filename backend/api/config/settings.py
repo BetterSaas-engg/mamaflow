@@ -7,6 +7,9 @@ _WEAK_SECRETS = {"", "dev-secret-key", "your-jwt-secret-key"}
 class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
+    # Mobile PKCE flow (D23): the iOS OAuth client id the app uses for the
+    # authorization-code request; the backend exchanges the code with it (no secret).
+    google_ios_client_id: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
     secret_key: str = "dev-secret-key"
     algorithm: str = "HS256"
