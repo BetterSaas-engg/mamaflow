@@ -9,24 +9,30 @@ class _MockApi extends Mock implements ApiClient {}
 
 class _MockTokenStore extends Mock implements TokenStore {}
 
-/// A controllable stand-in for the Google sign-in plugin boundary so the
-/// exchange logic is testable without the real plugin / a device.
+/// A controllable stand-in for the OAuth code boundary so the exchange logic is
+/// testable without the real web-auth flow / a device.
 class _FakeGoogle implements GoogleAuthCodes {
-  _FakeGoogle(this.code);
-  final String? code;
+  _FakeGoogle(this.result);
+  final OAuthCodeResult? result;
   bool signedOut = false;
 
   @override
-  Future<String?> obtainServerAuthCode() async => code;
+  Future<OAuthCodeResult?> obtainAuthorizationCode() async => result;
 
   @override
   Future<void> signOut() async => signedOut = true;
 }
 
+const _fakeCode = OAuthCodeResult(
+  code: 'CODE',
+  codeVerifier: 'VER',
+  redirectUri: 'com.googleusercontent.apps.abc:/oauth2redirect',
+);
+
 void main() {
   setUpAll(() => registerFallbackValue(<String, dynamic>{}));
 
-  test('exchanges serverAuthCode for a JWT, stores it, returns the user', () async {
+  test('exchanges the auth code + PKCE for a JWT, stores it, returns the user', () async {
     final api = _MockApi();
     final store = _MockTokenStore();
     when(() => api.postJson(any(), any())).thenAnswer((_) async => {
@@ -36,7 +42,7 @@ void main() {
           'user': {'id': 'u1', 'email': 'parent@example.com'},
         });
     when(() => store.saveJwt(any())).thenAnswer((_) async {});
-    final auth = AuthService(api, store, _FakeGoogle('CODE'));
+    final auth = AuthService(api, store, _FakeGoogle(_fakeCode));
 
     final user = await auth.signInWithGoogle();
 
@@ -44,7 +50,11 @@ void main() {
     expect(user.email, 'parent@example.com');
     final captured = verify(() => api.postJson(captureAny(), captureAny())).captured;
     expect(captured[0], '/api/v1/auth/google/mobile');
-    expect(captured[1], {'server_auth_code': 'CODE'});
+    expect(captured[1], {
+      'code': 'CODE',
+      'code_verifier': 'VER',
+      'redirect_uri': 'com.googleusercontent.apps.abc:/oauth2redirect',
+    });
     verify(() => store.saveJwt('JWT123')).called(1);
   });
 
@@ -61,7 +71,7 @@ void main() {
     final api = _MockApi();
     final store = _MockTokenStore();
     when(() => api.postJson(any(), any())).thenAnswer((_) async => {'user': {}});
-    final auth = AuthService(api, store, _FakeGoogle('CODE'));
+    final auth = AuthService(api, store, _FakeGoogle(_fakeCode));
 
     await expectLater(auth.signInWithGoogle(), throwsA(isA<AuthException>()));
     verifyNever(() => store.saveJwt(any()));
@@ -71,7 +81,7 @@ void main() {
     final api = _MockApi();
     final store = _MockTokenStore();
     when(() => store.clear()).thenAnswer((_) async {});
-    final google = _FakeGoogle('x');
+    final google = _FakeGoogle(_fakeCode);
     final auth = AuthService(api, store, google);
 
     await auth.signOut();
@@ -84,7 +94,7 @@ void main() {
     final api = _MockApi();
     final store = _MockTokenStore();
     when(() => store.readJwt()).thenAnswer((_) async => 'JWT');
-    final auth = AuthService(api, store, _FakeGoogle('x'));
+    final auth = AuthService(api, store, _FakeGoogle(_fakeCode));
 
     expect(await auth.isSignedIn(), true);
   });

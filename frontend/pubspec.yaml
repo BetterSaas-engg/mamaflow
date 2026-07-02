@@ -43,6 +43,8 @@ dependencies:
   flutter_local_notifications: ^22.0.1
   google_sign_in: ^7.2.0
   google_mobile_ads: ^9.0.0
+  flutter_web_auth_2: ^4.0.0   # OAuth2 PKCE code flow (mobile Google sign-in, D23)
+  crypto: ^3.0.0               # PKCE S256 challenge
 
 dev_dependencies:
   flutter_test:

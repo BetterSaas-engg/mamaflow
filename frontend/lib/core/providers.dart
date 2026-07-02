@@ -1,7 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 
 import '../auth/auth_service.dart';
 import '../auth/google_auth_codes.dart';
@@ -11,11 +10,11 @@ import 'api_client.dart';
 const _baseUrl =
     String.fromEnvironment('API_BASE_URL', defaultValue: 'http://localhost:8000');
 
-// The WEB OAuth client id (the backend exchanges the serverAuthCode with the
-// matching web client secret). Supply at build time:
-//   --dart-define=GOOGLE_SERVER_CLIENT_ID=<web client id>
-const _serverClientId =
-    String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID', defaultValue: '');
+// The iOS OAuth client id used for the mobile PKCE auth-code flow (D23).
+// Supply at build time:
+//   --dart-define=GOOGLE_IOS_CLIENT_ID=<ios client id>
+const _iosClientId =
+    String.fromEnvironment('GOOGLE_IOS_CLIENT_ID', defaultValue: '');
 
 final tokenStoreProvider =
     Provider<TokenStore>((ref) => TokenStore(const FlutterSecureStorage()));
@@ -26,7 +25,7 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 });
 
 final googleAuthCodesProvider = Provider<GoogleAuthCodes>(
-  (ref) => GoogleSignInAuthCodes(GoogleSignIn.instance, serverClientId: _serverClientId),
+  (ref) => WebAuthPkceCodes(iosClientId: _iosClientId),
 );
 
 final authServiceProvider = Provider<AuthService>((ref) => AuthService(

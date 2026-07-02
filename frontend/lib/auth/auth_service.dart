@@ -27,14 +27,18 @@ class AuthService {
   final GoogleAuthCodes _google;
 
   Future<AuthUser> signInWithGoogle() async {
-    final serverAuthCode = await _google.obtainServerAuthCode();
-    if (serverAuthCode == null) {
+    final result = await _google.obtainAuthorizationCode();
+    if (result == null) {
       throw const AuthException('Google sign-in was cancelled');
     }
 
     final resp = await _api.postJson(
       '/api/v1/auth/google/mobile',
-      {'server_auth_code': serverAuthCode},
+      {
+        'code': result.code,
+        'code_verifier': result.codeVerifier,
+        'redirect_uri': result.redirectUri,
+      },
     );
 
     final jwt = resp['access_token'] as String?;

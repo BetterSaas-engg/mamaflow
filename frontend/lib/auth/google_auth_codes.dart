@@ -1,47 +1,102 @@
-import 'package:google_sign_in/google_sign_in.dart';
+import 'dart:convert';
+import 'dart:math';
 
-/// Boundary around the Google sign-in plugin: obtain a one-time **serverAuthCode**
-/// for the backend to exchange for Gmail tokens (D23 — those tokens never touch
-/// the device, D4). Kept as an interface so AuthService is testable without the
-/// plugin / a device.
+import 'package:crypto/crypto.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+
+/// Result of the OAuth authorization step: the code to exchange plus the PKCE
+/// verifier and redirect uri the backend needs to complete the exchange.
+class OAuthCodeResult {
+  const OAuthCodeResult({
+    required this.code,
+    required this.codeVerifier,
+    required this.redirectUri,
+  });
+
+  final String code;
+  final String codeVerifier;
+  final String redirectUri;
+}
+
+/// Boundary around the OAuth 2.0 authorization-code + PKCE flow (D23): opens
+/// Google's consent in a secure web tab and returns an auth code for the backend
+/// to exchange for Gmail tokens (which never touch the device, D4). Kept as an
+/// interface so AuthService is testable without a device.
 abstract class GoogleAuthCodes {
-  /// Runs Google authentication + server authorization and returns a
-  /// serverAuthCode, or null if the user denied the Gmail authorization.
-  /// Throws [GoogleSignInException] on cancellation / failure.
-  Future<String?> obtainServerAuthCode();
+  /// Runs the consent flow and returns the code + PKCE verifier + redirect uri,
+  /// or null if the user cancelled.
+  Future<OAuthCodeResult?> obtainAuthorizationCode();
 
   Future<void> signOut();
 }
 
-/// Real implementation backed by google_sign_in 7.x.
-class GoogleSignInAuthCodes implements GoogleAuthCodes {
-  GoogleSignInAuthCodes(this._google, {required String serverClientId})
-      // ignore: prefer_initializing_formals — public named param maps to a private field
-      : _serverClientId = serverClientId;
+/// Real implementation: OAuth 2.0 auth-code + PKCE via flutter_web_auth_2, using
+/// the iOS OAuth client. google_sign_in can't mint a Gmail-scoped serverAuthCode
+/// on iOS (see DECISIONS), so we run the flow directly.
+class WebAuthPkceCodes implements GoogleAuthCodes {
+  WebAuthPkceCodes({required String iosClientId}) : _clientId = iosClientId;
 
-  final GoogleSignIn _google;
-  final String _serverClientId;
-  bool _initialized = false;
+  final String _clientId;
 
-  // Read-only Gmail — the only scope the extraction pipeline needs.
-  static const _scopes = <String>['https://www.googleapis.com/auth/gmail.readonly'];
+  static const _scopes =
+      'openid email https://www.googleapis.com/auth/gmail.readonly';
 
-  Future<void> _ensureInitialized() async {
-    if (_initialized) return;
-    // serverClientId = the WEB OAuth client id; the backend exchanges the code
-    // with the matching web client secret.
-    await _google.initialize(serverClientId: _serverClientId);
-    _initialized = true;
+  /// iOS OAuth clients use the reversed client id as the redirect scheme
+  /// (the same scheme registered in Info.plist).
+  String get _redirectScheme {
+    final prefix = _clientId.replaceAll('.apps.googleusercontent.com', '');
+    return 'com.googleusercontent.apps.$prefix';
   }
 
   @override
-  Future<String?> obtainServerAuthCode() async {
-    await _ensureInitialized();
-    await _google.authenticate(scopeHint: const <String>['email']);
-    final authorization = await _google.authorizationClient.authorizeServer(_scopes);
-    return authorization?.serverAuthCode;
+  Future<OAuthCodeResult?> obtainAuthorizationCode() async {
+    final verifier = _randomVerifier();
+    final challenge = _s256Challenge(verifier);
+    final redirectUri = '$_redirectScheme:/oauth2redirect';
+
+    final url = Uri.https('accounts.google.com', '/o/oauth2/v2/auth', {
+      'client_id': _clientId,
+      'redirect_uri': redirectUri,
+      'response_type': 'code',
+      'scope': _scopes,
+      'access_type': 'offline',
+      'prompt': 'consent',
+      'code_challenge': challenge,
+      'code_challenge_method': 'S256',
+    }).toString();
+
+    // Ephemeral: no shared cookies, so the user re-picks their account each time
+    // and we always get a fresh offline grant.
+    final result = await FlutterWebAuth2.authenticate(
+      url: url,
+      callbackUrlScheme: _redirectScheme,
+      options: const FlutterWebAuth2Options(preferEphemeral: true),
+    );
+
+    final code = Uri.parse(result).queryParameters['code'];
+    if (code == null) return null;
+    return OAuthCodeResult(
+      code: code,
+      codeVerifier: verifier,
+      redirectUri: redirectUri,
+    );
   }
 
   @override
-  Future<void> signOut() => _google.signOut();
+  Future<void> signOut() async {
+    // The web-auth session is ephemeral; nothing persists to clear. The app's
+    // own JWT is cleared by AuthService.
+  }
+
+  static String _randomVerifier() {
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+    final rand = Random.secure();
+    return List.generate(64, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  static String _s256Challenge(String verifier) {
+    final digest = sha256.convert(ascii.encode(verifier));
+    return base64UrlEncode(digest.bytes).replaceAll('=', '');
+  }
 }

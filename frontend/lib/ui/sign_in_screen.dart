@@ -24,8 +24,10 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     try {
       await ref.read(sessionProvider.notifier).signIn();
       // On success the auth gate swaps to the home screen automatically.
-    } catch (_) {
-      if (mounted) setState(() => _error = 'Sign-in failed. Please try again.');
+    } catch (e, st) {
+      // TEMP DIAGNOSTIC: surface the real error to the console + screen.
+      debugPrint('SIGN-IN ERROR: $e\n$st');
+      if (mounted) setState(() => _error = 'Sign-in failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
