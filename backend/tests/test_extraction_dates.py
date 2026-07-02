@@ -44,6 +44,14 @@ def test_none_date_stays_none():
     assert normalize_item_date(None, EMAIL_DATE) is None
 
 
+def test_malicious_date_header_never_crashes():
+    # The Date header is attacker-controlled (spoofable via SMTP); a huge year
+    # makes parsedate_to_datetime raise OverflowError. Must not crash the sync.
+    evil = "Wed, 2 Jul 99999999999999999999 10:00:00 -0400"
+    assert normalize_item_date("July 5", evil) == "July 5"  # no ref year -> unchanged
+    assert normalize_item_date("2026-07-05", evil) == "2026-07-05"
+
+
 # --- prompt + wrap carry the date contract ---
 
 

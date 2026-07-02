@@ -65,7 +65,10 @@ def normalize_item_date(value: str | None, email_date: str = "") -> str | None:
     if email_date:
         try:
             ref = email.utils.parsedate_to_datetime(email_date).date()
-        except (ValueError, TypeError):
+        except Exception:
+            # The Date header is attacker-controlled (spoofable via SMTP) and
+            # parsedate_to_datetime can raise more than ValueError/TypeError —
+            # e.g. OverflowError on absurd years. Any failure = no reference.
             ref = None
 
     if ref is not None:
