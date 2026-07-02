@@ -23,11 +23,7 @@ class _FakeGoogle implements GoogleAuthCodes {
   Future<void> signOut() async => signedOut = true;
 }
 
-const _fakeCode = OAuthCodeResult(
-  code: 'CODE',
-  codeVerifier: 'VER',
-  redirectUri: 'com.googleusercontent.apps.abc:/oauth2redirect',
-);
+const _fakeCode = OAuthCodeResult(code: 'CODE', codeVerifier: 'VER');
 
 void main() {
   setUpAll(() => registerFallbackValue(<String, dynamic>{}));
@@ -50,11 +46,7 @@ void main() {
     expect(user.email, 'parent@example.com');
     final captured = verify(() => api.postJson(captureAny(), captureAny())).captured;
     expect(captured[0], '/api/v1/auth/google/mobile');
-    expect(captured[1], {
-      'code': 'CODE',
-      'code_verifier': 'VER',
-      'redirect_uri': 'com.googleusercontent.apps.abc:/oauth2redirect',
-    });
+    expect(captured[1], {'code': 'CODE', 'code_verifier': 'VER'});
     verify(() => store.saveJwt('JWT123')).called(1);
   });
 

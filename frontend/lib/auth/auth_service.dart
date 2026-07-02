@@ -34,11 +34,7 @@ class AuthService {
 
     final resp = await _api.postJson(
       '/api/v1/auth/google/mobile',
-      {
-        'code': result.code,
-        'code_verifier': result.codeVerifier,
-        'redirect_uri': result.redirectUri,
-      },
+      {'code': result.code, 'code_verifier': result.codeVerifier},
     );
 
     final jwt = resp['access_token'] as String?;

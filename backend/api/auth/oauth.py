@@ -100,10 +100,17 @@ async def google_callback(request: Request):
 _GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
+def mobile_redirect_uri(ios_client_id: str) -> str:
+    """The reversed-client-id redirect used by the app, derived server-side so
+    the client can never influence the value sent to Google (defense-in-depth;
+    Google independently enforces the /authorize <-> /token match)."""
+    prefix = ios_client_id.replace(".apps.googleusercontent.com", "")
+    return f"com.googleusercontent.apps.{prefix}:/oauth2redirect"
+
+
 class MobileAuthRequest(BaseModel):
     code: str
     code_verifier: str
-    redirect_uri: str
 
 
 class MobileAuthUser(BaseModel):
@@ -121,13 +128,15 @@ class MobileAuthResponse(BaseModel):
 async def exchange_code_pkce(
     code: str,
     code_verifier: str,
-    redirect_uri: str,
 ) -> tuple[dict, str]:
     """Exchange a PKCE authorization code for Gmail tokens; return (creds, email).
 
-    Uses the iOS client id + PKCE verifier (no client secret). Identity is taken
-    from the verified id_token, never trusted from the client.
+    Uses the iOS client id + PKCE verifier (no client secret); the redirect_uri
+    is derived server-side, never client-supplied. Identity is taken from the
+    verified id_token, never trusted from the client.
     """
+    import asyncio
+
     import httpx
     from google.auth.transport.requests import Request as GoogleRequest
     from google.oauth2 import id_token
@@ -139,14 +148,17 @@ async def exchange_code_pkce(
                 "client_id": settings.google_ios_client_id,
                 "code": code,
                 "code_verifier": code_verifier,
-                "redirect_uri": redirect_uri,
+                "redirect_uri": mobile_redirect_uri(settings.google_ios_client_id),
                 "grant_type": "authorization_code",
             },
         )
     resp.raise_for_status()
     tokens = resp.json()
 
-    id_info = id_token.verify_oauth2_token(
+    # verify_oauth2_token fetches Google's signing certs with a SYNC transport —
+    # run it off the event loop.
+    id_info = await asyncio.to_thread(
+        id_token.verify_oauth2_token,
         tokens["id_token"],
         GoogleRequest(),
         settings.google_ios_client_id,
@@ -171,9 +183,7 @@ async def google_mobile_auth(
     """Mobile sign-in: exchange PKCE code -> Gmail tokens (kept server-side, D4)
     -> find/create the User -> issue an app session JWT (D23)."""
     try:
-        creds_data, email = await exchange_code_pkce(
-            payload.code, payload.code_verifier, payload.redirect_uri
-        )
+        creds_data, email = await exchange_code_pkce(payload.code, payload.code_verifier)
     except Exception as e:
         # Log the real reason server-side (e.g. Google's invalid_grant /
         # redirect_uri_mismatch body); return a generic 400 to the client.

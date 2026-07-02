@@ -19,12 +19,11 @@ FAKE_CREDS = {
 BODY = {
     "code": "auth-code-123",
     "code_verifier": "pkce-verifier-xyz",
-    "redirect_uri": "com.googleusercontent.apps.abc:/oauth2redirect",
 }
 
 
 async def test_valid_code_returns_jwt_and_creates_user(client, db, monkeypatch):
-    async def _fake_exchange(code, code_verifier, redirect_uri):
+    async def _fake_exchange(code, code_verifier):
         assert code == "auth-code-123"
         assert code_verifier == "pkce-verifier-xyz"
         return FAKE_CREDS, "Parent@Example.com"
@@ -45,7 +44,7 @@ async def test_valid_code_returns_jwt_and_creates_user(client, db, monkeypatch):
 
 
 async def test_gmail_tokens_stored_server_side(client, monkeypatch):
-    async def _fake_exchange(code, code_verifier, redirect_uri):
+    async def _fake_exchange(code, code_verifier):
         return FAKE_CREDS, "parent@example.com"
 
     monkeypatch.setattr(oauth, "exchange_code_pkce", _fake_exchange)
@@ -58,10 +57,17 @@ async def test_gmail_tokens_stored_server_side(client, monkeypatch):
 
 
 async def test_invalid_code_returns_400(client, monkeypatch):
-    async def _boom(code, code_verifier, redirect_uri):
+    async def _boom(code, code_verifier):
         raise ValueError("bad code")
 
     monkeypatch.setattr(oauth, "exchange_code_pkce", _boom)
 
     resp = await client.post("/api/v1/auth/google/mobile", json=BODY)
     assert resp.status_code == 400
+
+
+def test_mobile_redirect_uri_derived_from_ios_client_id():
+    # Defense-in-depth: the redirect_uri is never client-supplied; it is derived
+    # server-side from the configured iOS client id.
+    uri = oauth.mobile_redirect_uri("12345-abcdef.apps.googleusercontent.com")
+    assert uri == "com.googleusercontent.apps.12345-abcdef:/oauth2redirect"

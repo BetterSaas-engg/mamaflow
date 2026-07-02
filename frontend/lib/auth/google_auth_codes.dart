@@ -5,17 +5,13 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 
 /// Result of the OAuth authorization step: the code to exchange plus the PKCE
-/// verifier and redirect uri the backend needs to complete the exchange.
+/// verifier the backend needs to complete the exchange. (The redirect_uri is
+/// derived server-side from the iOS client id — never client-supplied.)
 class OAuthCodeResult {
-  const OAuthCodeResult({
-    required this.code,
-    required this.codeVerifier,
-    required this.redirectUri,
-  });
+  const OAuthCodeResult({required this.code, required this.codeVerifier});
 
   final String code;
   final String codeVerifier;
-  final String redirectUri;
 }
 
 /// Boundary around the OAuth 2.0 authorization-code + PKCE flow (D23): opens
@@ -50,6 +46,17 @@ class WebAuthPkceCodes implements GoogleAuthCodes {
 
   @override
   Future<OAuthCodeResult?> obtainAuthorizationCode() async {
+    // Empty here => the build didn't get --dart-define=GOOGLE_IOS_CLIENT_ID
+    // (e.g. launched from Xcode, which doesn't pass dart-defines). Fail loudly
+    // instead of building a broken auth URL.
+    if (_clientId.isEmpty) {
+      throw StateError(
+        'GOOGLE_IOS_CLIENT_ID is empty. Launch with: flutter run '
+        '--dart-define=GOOGLE_IOS_CLIENT_ID=<ios client id> '
+        "(Xcode's Run button does not pass --dart-define).",
+      );
+    }
+
     final verifier = _randomVerifier();
     final challenge = _s256Challenge(verifier);
     final redirectUri = '$_redirectScheme:/oauth2redirect';
@@ -75,11 +82,7 @@ class WebAuthPkceCodes implements GoogleAuthCodes {
 
     final code = Uri.parse(result).queryParameters['code'];
     if (code == null) return null;
-    return OAuthCodeResult(
-      code: code,
-      codeVerifier: verifier,
-      redirectUri: redirectUri,
-    );
+    return OAuthCodeResult(code: code, codeVerifier: verifier);
   }
 
   @override
