@@ -3,20 +3,35 @@ import 'package:dio/dio.dart';
 /// Thin REST/JSON client to the Mamaflow API. Attaches the app session JWT
 /// (when present) as a Bearer token on every request. Gmail/OAuth tokens never
 /// live on the device (D4) — only the app's own session JWT, supplied here.
+///
+/// onUnauthorized fires on any 401 (expired/invalid session JWT) so the app can
+/// clear the session and return to sign-in; the error still propagates.
 class ApiClient {
   final Dio _dio;
   final Future<String?> Function() _jwtProvider;
 
-  ApiClient(this._dio, {required Future<String?> Function() jwtProvider})
+  ApiClient(
+    this._dio, {
+    required Future<String?> Function() jwtProvider,
+    Future<void> Function()? onUnauthorized,
+  })
       // ignore: prefer_initializing_formals — public named param maps to a private field
       : _jwtProvider = jwtProvider {
-    _dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) async {
-      final jwt = await _jwtProvider();
-      if (jwt != null && jwt.isNotEmpty) {
-        options.headers['Authorization'] = 'Bearer $jwt';
-      }
-      handler.next(options);
-    }));
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        final jwt = await _jwtProvider();
+        if (jwt != null && jwt.isNotEmpty) {
+          options.headers['Authorization'] = 'Bearer $jwt';
+        }
+        handler.next(options);
+      },
+      onError: (e, handler) async {
+        if (e.response?.statusCode == 401 && onUnauthorized != null) {
+          await onUnauthorized();
+        }
+        handler.next(e);
+      },
+    ));
   }
 
   Future<Map<String, dynamic>> getJson(String path, {Map<String, dynamic>? query}) async {

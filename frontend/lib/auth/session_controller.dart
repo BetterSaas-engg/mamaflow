@@ -19,6 +19,10 @@ class SessionController extends AsyncNotifier<bool> {
     await ref.read(authServiceProvider).signOut();
     state = const AsyncData(false);
   }
+
+  /// Called by the API client on a 401 (expired/invalid JWT): clear the stored
+  /// session and drop back to the sign-in screen.
+  Future<void> handleUnauthorized() => signOut();
 }
 
 final sessionProvider =

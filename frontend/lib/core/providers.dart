@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../auth/auth_service.dart';
 import '../auth/google_auth_codes.dart';
+import '../auth/session_controller.dart';
 import '../auth/token_store.dart';
 import 'api_client.dart';
 
@@ -21,7 +22,14 @@ final tokenStoreProvider =
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   final store = ref.watch(tokenStoreProvider);
-  return ApiClient(Dio(BaseOptions(baseUrl: _baseUrl)), jwtProvider: store.readJwt);
+  return ApiClient(
+    Dio(BaseOptions(baseUrl: _baseUrl)),
+    jwtProvider: store.readJwt,
+    // Expired/invalid JWT (401) -> clear the session; the auth gate then shows
+    // sign-in. ref.read at call time avoids a build-time provider cycle.
+    onUnauthorized: () =>
+        ref.read(sessionProvider.notifier).handleUnauthorized(),
+  );
 });
 
 final googleAuthCodesProvider = Provider<GoogleAuthCodes>(
