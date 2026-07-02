@@ -66,6 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- AdMob (google_mobile_ads) requires this at launch. Google's TEST app id
+	     for dev; replace with the real AdMob app id later. Ads stay firewalled +
+	     non-personalized (D19/D21). -->
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
 	<!-- Google Sign-In (D23): iOS OAuth client id; google_sign_in reads GIDClientID here. -->
 	<key>GIDClientID</key>
 	<string>682580051335-t2pf5pi319mg7cfub2b5725fv907ttq7.apps.googleusercontent.com</string>
