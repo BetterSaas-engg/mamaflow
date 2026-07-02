@@ -58,17 +58,24 @@
 >   fixed in 829bb67).
 > - iOS config: deployment target 15.0 (Firebase SPM); Info.plist has GIDClientID + reversed-id URL
 >   scheme + GADApplicationIdentifier (Google TEST id — replace before release) + dev-only ATS.
+> - ~~Extraction date formats~~ **FIXED** (`1e1bba2`, `a702b09`): prompt forces ISO YYYY-MM-DD
+>   (Date header added to the wrap for reference) + deterministic `normalize_item_date` backstop.
+>   Audit of the change found + fixed a BLOCK: spoofed Date headers (OverflowError) could 500 a
+>   whole sync batch.
+> - ~~JWT expiry UX~~ **FIXED** (`f2b0b7c`): 401 → auto sign-out (ApiClient onUnauthorized →
+>   SessionController → auth gate shows sign-in).
 > - **Known issues (next up):**
->   1. Extraction returns inconsistent `date` formats ("July 5th (Saturday)" vs "2026-06-10") —
->      breaks the ISO-string date-range filter on GET /items; tighten the extraction prompt to force
->      YYYY-MM-DD (touches the locked prompt → own TDD pass + security audit).
->   2. App JWT expires in 15 min with no refresh/auto-signout — add a 401 interceptor (clear JWT →
->      sign-in screen) or a refresh flow.
->   3. Gmail tokens in-memory — backend restart loses them (re-sign-in required); Secret Manager is
+>   1. Gmail tokens in-memory — backend restart loses them (re-sign-in required); Secret Manager is
 >      the Phase-1 fix.
->   4. Sync is synchronous on the request path (~50 Claude calls worst case) — background processing
+>   2. Sync is synchronous on the request path (~50 Claude calls worst case) — background processing
 >      still pending (Phase 1 list).
-> - Branch `feat/backend-mobile-integration` (about 17 commits) NOT yet pushed/PR'd.
+>   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
+>      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
+>      output hardening.
+> - Branch `feat/backend-mobile-integration` **pushed** (40 commits). PR pending: `gh` is
+>   authenticated as a non-collaborator account — open via
+>   https://github.com/BetterSaas-engg/mamaflow/pull/new/feat/backend-mobile-integration
+>   or re-auth `gh` as the collaborator account.
 
 > **Update 2026-06-24 — Frontend mobile sign-in wired to the backend.** Flutter app now does the
 > D23 flow: `google_sign_in` 7.x → serverAuthCode → `POST /api/v1/auth/google/mobile` → store the
