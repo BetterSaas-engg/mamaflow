@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
@@ -9,6 +11,8 @@ from api.auth.token_store import store_token
 from api.config.settings import settings
 from api.db.session import get_db
 from api.services.users import get_or_create_user
+
+_log = logging.getLogger(__name__)
 
 # Phase 0: in-memory PKCE state, same pattern as token_store
 _pending_states: dict[str, str] = {}
@@ -170,7 +174,11 @@ async def google_mobile_auth(
         creds_data, email = await exchange_code_pkce(
             payload.code, payload.code_verifier, payload.redirect_uri
         )
-    except Exception:
+    except Exception as e:
+        # Log the real reason server-side (e.g. Google's invalid_grant /
+        # redirect_uri_mismatch body); return a generic 400 to the client.
+        reason = getattr(getattr(e, "response", None), "text", None) or repr(e)
+        _log.warning("mobile auth exchange failed: %s", reason)
         raise HTTPException(status_code=400, detail="Invalid authorization code")
 
     user = await get_or_create_user(db, email)
