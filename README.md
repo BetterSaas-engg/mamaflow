@@ -52,6 +52,29 @@ python -m pytest                                # test suite
 
 To serve a physical phone on your LAN: `uvicorn api.main:app --host 0.0.0.0 --port 8000`.
 
+## Backend — deploy (Railway)
+
+The backend ships as a Docker image (`backend/Dockerfile`; the spaCy model is baked at build
+time, `start.sh` runs migrations then uvicorn on `$PORT`). One service, **single instance**
+(the token-store cache is not multi-instance coherent yet — see HANDOFF).
+
+Railway setup (once):
+1. New service → *Deploy from GitHub repo* → pick this repo, branch `main` (or the feature
+   branch while testing). Set **Root Directory = `backend`** so Railway finds the Dockerfile.
+2. Variables (Service → Variables):
+   - `DATABASE_URL` → reference the Railway Postgres (`${{Postgres.DATABASE_URL}}`)
+   - `SECRET_KEY` → fresh 48+ char random (`python3 -c "import secrets; print(secrets.token_urlsafe(48))"`)
+   - `ENVIRONMENT=production` (enforces the strong-SECRET_KEY check)
+   - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_IOS_CLIENT_ID`, `ANTHROPIC_API_KEY`
+   - `TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID=<project>`,
+     `GOOGLE_APPLICATION_CREDENTIALS_JSON=<paste the service-account JSON>` (start.sh
+     materializes it to tmpfs for ADC — the key never lives in the repo/image)
+3. Networking → *Generate Domain* → note the `https://….up.railway.app` URL.
+4. Verify: `curl https://<domain>/health` → `{"status":"ok"}`; docs at `/docs`.
+
+Point the app at it: `--dart-define=API_BASE_URL=https://<domain>` (https — the iOS dev ATS
+exception is only needed for local http).
+
 ## Mobile auth (D23/D28)
 
 Sign-in is a direct **OAuth 2.0 authorization-code + PKCE** flow: the app opens Google's
