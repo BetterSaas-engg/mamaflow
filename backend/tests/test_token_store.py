@@ -95,3 +95,44 @@ def test_get_uses_cache_after_store(sm_client):
 
     assert creds == CREDS
     sm_client.access_secret_version.assert_not_called()
+
+
+def test_gcp_outage_raises_sanitized_error(sm_client):
+    # PermissionDenied / ServiceUnavailable etc. must surface as a domain error
+    # without GCP internals, not propagate raw (audit finding).
+    from api.auth.token_store import TokenStoreError
+
+    sm_client.access_secret_version.side_effect = gcp_exceptions.ServiceUnavailable("gcp guts")
+    store = _store(sm_client)
+
+    with pytest.raises(TokenStoreError) as exc:
+        store.get("parent@example.com")
+    assert "gcp guts" not in str(exc.value)
+
+
+def test_store_is_built_lazily(monkeypatch):
+    # A dev .env with TOKEN_STORE_BACKEND=secret-manager must not construct a
+    # real GCP client at import/collection time — only on first use (audit
+    # finding). Reset the lazy singleton and verify no client is built until
+    # a token call happens.
+    from api.auth import token_store
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(token_store, "_store", None)
+    monkeypatch.setattr(app_settings, "token_store_backend", "secret-manager")
+    monkeypatch.setattr(app_settings, "gcp_project_id", "proj-123")
+
+    built = []
+
+    def _fake_init(self, project_id, client=None):
+        built.append(project_id)
+        self._cache = {}  # minimal state so list_users() works
+
+    monkeypatch.setattr(token_store.SecretManagerTokenStore, "__init__", _fake_init)
+
+    assert built == []  # nothing constructed yet
+    token_store.get_token  # attribute access alone must not build either
+    assert built == []
+
+    token_store.list_users()  # first real use builds the backend
+    assert built == ["proj-123"]

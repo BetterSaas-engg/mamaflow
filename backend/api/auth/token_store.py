@@ -19,6 +19,11 @@ from api.config.settings import settings
 _log = logging.getLogger(__name__)
 
 
+class TokenStoreError(Exception):
+    """Token storage backend unavailable/failed. Message is sanitized — never
+    carries GCP internals (they stay in the chained exception for server logs)."""
+
+
 class InMemoryTokenStore:
     def __init__(self) -> None:
         self._tokens: dict[str, dict] = {}
@@ -61,22 +66,27 @@ class SecretManagerTokenStore:
         secret_id = self.secret_id_for(user_email)
         parent = f"projects/{self._project}"
         try:
-            self._client.create_secret(
+            try:
+                self._client.create_secret(
+                    request={
+                        "parent": parent,
+                        "secret_id": secret_id,
+                        "secret": {"replication": {"automatic": {}}},
+                    }
+                )
+            except gcp_exceptions.AlreadyExists:
+                pass  # updating an existing user's token
+
+            self._client.add_secret_version(
                 request={
-                    "parent": parent,
-                    "secret_id": secret_id,
-                    "secret": {"replication": {"automatic": {}}},
+                    "parent": f"{parent}/secrets/{secret_id}",
+                    "payload": {"data": json.dumps(credentials).encode()},
                 }
             )
-        except gcp_exceptions.AlreadyExists:
-            pass  # updating an existing user's token
-
-        self._client.add_secret_version(
-            request={
-                "parent": f"{parent}/secrets/{secret_id}",
-                "payload": {"data": json.dumps(credentials).encode()},
-            }
-        )
+        except gcp_exceptions.GoogleAPIError as e:
+            # Sanitized: GCP internals stay in the chained exception (server
+            # logs), never in the message callers might surface.
+            raise TokenStoreError("token store write failed") from e
         self._cache[user_email.strip().lower()] = credentials
 
     def get(self, user_email: str) -> dict | None:
@@ -94,6 +104,8 @@ class SecretManagerTokenStore:
             response = self._client.access_secret_version(request={"name": name})
         except gcp_exceptions.NotFound:
             return None
+        except gcp_exceptions.GoogleAPIError as e:
+            raise TokenStoreError("token store read failed") from e
 
         credentials = json.loads(response.payload.data.decode())
         self._cache[key] = credentials
@@ -105,28 +117,37 @@ class SecretManagerTokenStore:
         return list(self._cache)
 
 
-def _build_store():
-    if settings.token_store_backend == "secret-manager":
-        if not settings.gcp_project_id:
-            raise RuntimeError(
-                "TOKEN_STORE_BACKEND=secret-manager requires GCP_PROJECT_ID"
+# Built lazily on first use — NOT at import time — so a dev .env selecting
+# secret-manager can't couple test collection / module import to live GCP
+# credentials (audit finding).
+_store = None
+
+
+def _get_store():
+    global _store
+    if _store is None:
+        if settings.token_store_backend == "secret-manager":
+            if not settings.gcp_project_id:
+                raise RuntimeError(
+                    "TOKEN_STORE_BACKEND=secret-manager requires GCP_PROJECT_ID"
+                )
+            _log.info(
+                "token store: Secret Manager (project %s)", settings.gcp_project_id
             )
-        _log.info("token store: Secret Manager (project %s)", settings.gcp_project_id)
-        return SecretManagerTokenStore(settings.gcp_project_id)
-    _log.info("token store: in-memory (tokens lost on restart)")
-    return InMemoryTokenStore()
-
-
-_store = _build_store()
+            _store = SecretManagerTokenStore(settings.gcp_project_id)
+        else:
+            _log.info("token store: in-memory (tokens lost on restart)")
+            _store = InMemoryTokenStore()
+    return _store
 
 
 def store_token(user_email: str, credentials: dict) -> None:
-    _store.store(user_email, credentials)
+    _get_store().store(user_email, credentials)
 
 
 def get_token(user_email: str) -> dict | None:
-    return _store.get(user_email)
+    return _get_store().get(user_email)
 
 
 def list_users() -> list[str]:
-    return _store.list_users()
+    return _get_store().list_users()

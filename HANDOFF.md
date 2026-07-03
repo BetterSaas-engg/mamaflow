@@ -80,7 +80,7 @@
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | in progress |
-| C | Deploy backend to Railway (Dockerfile, https, prod SECRET_KEY; kills dev ATS/cleartext exceptions) | after A1 |
+| C | Deploy backend to Railway (Dockerfile, https, prod SECRET_KEY; kills dev ATS/cleartext exceptions). ⚠️ Audit flag: the token store's in-process cache is NOT multi-instance coherent — instance A's token refresh won't invalidate instance B's cache. Single instance only until a TTL/invalidation hook lands. | after A1 |
 | A2 | Background sync (APScheduler per D26) + incremental sync (last-synced message id) | after C |
 | A3 | Extraction hardening: tool-use/structured output (also fixes the raw_text log nit), model review, Batch API backfill, rate limiting | with A2 |
 | B | Android OAuth client (SHA-1 `8B:E8:14:1C:…`) → app on Android; Firebase/FCM sender + APNs (D22/D26/D27) | needs console/accounts (user) |
