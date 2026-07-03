@@ -1,209 +1,64 @@
-# Mamaflow — Claude Code Instructions
-**BetterSaas Venture | Phase 0**
+# CLAUDE.md — Mamaflow (Claude Code)
 
----
+The canonical rules are in @AGENTS.md — read it first. It is always in effect. When a rule in
+AGENTS.md and a request conflict, the rule wins. **The firewall is not negotiable.**
 
-## What This Project Is
+## Claude Code specifics
 
-Mamaflow is a family operations assistant PWA for busy moms. It connects to Gmail, reads family-related emails (school, doctors, activities, playdates, summer planning), and surfaces structured, actionable events in a clean interface.
+- **Deterministic guardrail:** `scripts/firewall-guard.sh` runs on every edit (PostToolUse hook in
+  `.claude/settings.json`) and on every commit (git pre-commit hook). If it exits non-zero, fix the
+  flagged code — do not disable the hook or edit settings to silence it.
+- **Subagents:** `@security-auditor` before finishing any change that touches the ad layer, the
+  Gmail reader, the Claude extractor, or data persistence. `@code-reviewer` for general review.
+- **Skills** (auto-load by context, or invoke with `/name`):
+  - `email-extraction` — how to write/modify the Claude extraction call.
+  - `firewall-privacy-audit` — content→ad firewall + PII data-flow self-check.
+  - `testing` — pytest conventions; mock the Anthropic/Gmail clients (never hit live APIs in tests).
+  - `code-maintainability-audit` — async/Pydantic/UUID-UTC/secrets checklist.
+  - `db-migrations` — Alembic + SQLAlchemy model conventions.
+- **Commands:** `/firewall-check` runs the guard + summarizes; `/phase-status` reports remaining tasks.
 
-This is a real product. Build it like one.
+## Project memory (file-based, durable — survives any context window)
 
----
+These committed files ARE the project's long-term memory. Read them at the start of work; keep them
+current:
+- **@AGENTS.md** — rules/constraints (loaded every session).
+- **DECISIONS.md** — the decision log / "why" (`D1…Dn`, append-only).
+- **HANDOFF.md** — living build state: done / next / known issues.
 
-## Who Is Building This
+After each working step, update `HANDOFF.md`. When you make a decision, append it to `DECISIONS.md`.
 
-Akhil is a technical PM — he directs builds, reviews output, and makes architecture decisions. He does not write code from scratch. Your job is to build correctly, explain trade-offs clearly, and move one step at a time. Never pre-empt the next step. Build what is asked, stop, wait for confirmation.
-
----
-
-## Core Architecture (read before touching anything)
-
-```
-Gmail OAuth → Email ingestion → Sender blocklist (Layer 1) →
-Presidio PII redaction (Layer 2) → Category allowlist (Layer 3) →
-Prompt injection wrap → Claude API extraction →
-Structured events → PostgreSQL → React PWA
-```
-
-**DataBridge pattern:**
-- Email Shim: public-facing, no credentials, wraps content, forwards to broker
-- Email Broker: private, holds OAuth tokens, calls Gmail API, runs privacy pipeline, calls Claude
-- These two are separate services. The shim never holds a token. Ever.
-
-**PII rules (non-negotiable):**
-- Raw email body is NEVER stored in the database
-- OAuth tokens are NEVER stored in the database — Secret Manager reference only
-- Financial emails are blocked at Layer 1 before the body is ever fetched
-- Presidio redacts account numbers, card numbers, government IDs before Claude sees anything
-
----
-
-## Tech Stack
-
-| Layer | Choice |
-|---|---|
-| Backend | Python 3.11+ / FastAPI |
-| Database | PostgreSQL |
-| ORM | SQLAlchemy 2.0 + Alembic migrations |
-| Auth | Google OAuth 2.0 + PyJWT |
-| AI | Claude API (claude-sonnet-4-20250514) |
-| PII redaction | Microsoft Presidio |
-| Email | Gmail API (google-auth, google-api-python-client) |
-| Frontend | React + Vite PWA + Tailwind CSS |
-| Payments | Stripe |
-| Hosting | Railway (API) + Vercel (PWA) |
-
----
-
-## Project Structure
+## Repo layout (monorepo)
 
 ```
 mamaflow/
-├── api/
-│   ├── auth/
-│   ├── routers/
-│   ├── services/
-│   │   ├── email_shim.py
-│   │   ├── email_broker.py
-│   │   ├── ai_extractor.py
-│   │   ├── content_safety.py
-│   │   ├── sender_blocklist.py
-│   │   ├── privacy_pipeline.py
-│   │   ├── ad_profile_builder.py
-│   │   ├── deals_matcher.py
-│   │   └── stripe_service.py
-│   ├── models/
-│   ├── schemas/
-│   ├── db/
-│   ├── config/
-│   │   └── blocked_domains.json
-│   └── main.py
-├── pwa/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── hooks/
-│   │   └── config/
-│   │       └── copy.ts
-│   └── public/
-│       └── manifest.json
-├── DECISIONS.md
-├── CLAUDE.md         ← this file
-├── .env.example
-├── .gitignore
-└── README.md
+├── AGENTS.md  CLAUDE.md  GEMINI.md  DECISIONS.md  HANDOFF.md  AI-SETUP.md
+├── .claude/  .agents/  scripts/  .githooks/   ← AI config + firewall guard (shared)
+├── infra/                                      ← Terraform (GCP project, OAuth)
+├── backend/                                    ← FastAPI; package is `api` (import path unchanged)
+│   ├── api/  alembic/  alembic.ini  requirements.txt  tests/  .env.example
+└── frontend/                                   ← future client (platform under review — see DECISIONS.md)
 ```
 
----
-
-## Development Rules
-
-1. **One step at a time.** Build what is asked. Stop. Wait for confirmation before the next step.
-2. **Never store secrets in code.** All credentials go in `.env` (gitignored). Provide `.env.example` with placeholder values.
-3. **Always write `.env.example`** alongside any new environment variable.
-4. **Migrations over raw SQL.** All schema changes go through Alembic.
-5. **Pydantic schemas for all API boundaries.** No raw dicts passed between layers.
-6. **Soft deletes everywhere.** Never `DELETE` a row that has user data. Use `deleted_at` timestamp.
-7. **UUIDs as primary keys.** No integer IDs.
-8. **UTC timestamps everywhere.** No local time in the database.
-9. **Test the happy path first.** Get it working end-to-end, then add error handling.
-10. **Comment the why, not the what.** Code should explain decisions, not re-state what the code does.
-
----
-
-## Git Conventions (Conventional Commits)
-
-```
-feat: add Gmail OAuth flow
-fix: handle missing email subject in extractor
-chore: add Alembic migration for events table
-docs: update CLAUDE.md with Phase 1 instructions
-refactor: extract sender blocklist into separate service
-```
-
-Commit after each working step. Small commits, clear messages.
-
----
-
-## Environment Variables
+## Running the backend (from `backend/`)
 
 ```bash
-# API
-DATABASE_URL=postgresql://user:password@localhost:5432/mamaflow
-SECRET_KEY=your-jwt-secret-key
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=15
-
-# Google OAuth
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
-
-# Claude API
-ANTHROPIC_API_KEY=your-anthropic-api-key
-
-# Stripe (Phase 2)
-STRIPE_SECRET_KEY=your-stripe-secret-key
-STRIPE_WEBHOOK_SECRET=your-stripe-webhook-secret
-
-# Environment
-ENVIRONMENT=development
+cd backend
+pip install -r requirements.txt
+python -m alembic upgrade head     # create sender_allowlist / sender_blocklist tables
+python -m api.db.seed              # seed default blocklist rows (idempotent)
+uvicorn api.main:app --reload      # serve on :8000  → GET /health
+python -m pytest                   # run the test suite
 ```
 
----
+Environment variables: copy `backend/.env.example` → `backend/.env` and fill it in. `.env.example`
+is the canonical list (DB URL, Google OAuth, Anthropic key, …). Never commit `.env`; never put
+secrets or OAuth tokens in code or the DB.
 
-## Phase 0 — What We Are Building Right Now
+## Conventions
 
-**Goal:** Prove that Gmail OAuth + Claude extraction works end-to-end on real emails.
-
-**Done when:** A real Gmail inbox is read, 10+ emails are processed through the privacy pipeline, and Claude returns structured JSON events that look correct.
-
-**Phase 0 steps in order:**
-
-1. Project scaffolding — folder structure, `requirements.txt`, `.env.example`, `.gitignore`
-2. FastAPI app skeleton — `main.py` boots, `/health` endpoint returns 200
-3. Gmail OAuth flow — user hits `/auth/google`, authenticates, token stored (in memory for Phase 0, Secret Manager in prod)
-4. Gmail reader — fetch last 30 days of inbox, return raw email list
-5. Sender blocklist — filter out blocked domains before fetching body
-6. Presidio redaction — run email body through PII redaction before anything else sees it
-7. Prompt injection wrapper — wrap sanitized content in structured prompt
-8. Claude extraction — call Claude API, parse JSON response
-9. Terminal output — print extracted events to terminal as formatted JSON
-10. End-to-end test — run against 10 real emails, review output quality
-
-**Phase 0 does NOT include:**
-- Database (PostgreSQL comes in Phase 1)
-- Frontend (PWA comes in Phase 2)
-- Stripe or ads (Phase 2+)
-- Deployment (local only for Phase 0)
-
----
-
-## Key Decisions Already Made (do not re-litigate)
-
-| # | Decision |
-|---|---|
-| D1 | Gmail OAuth first, Yahoo second |
-| D2 | Shim/broker split — shim never holds credentials |
-| D3 | Wrap-by-default prompt injection defense |
-| D4 | OAuth tokens never in database |
-| D5 | Raw email body never stored |
-| D9 | PWA only — no App Store native wrapper |
-| D13 | Sender blocklist is structural, not a user setting |
-| D14 | Microsoft Presidio for PII redaction |
-| D19 | Ad targeting from ad_profiles only, never email content |
-| D20 | PWA only — no App Store |
-
----
-
-## When You Are Unsure
-
-- Check DECISIONS.md before proposing a new architectural direction
-- Flag trade-offs explicitly — don't silently pick one
-- If a decision affects security or PII handling, stop and ask before proceeding
-- Prefer reversible decisions over irreversible ones
-
----
-
-*Mamaflow CLAUDE.md — updated for Phase 0*
+- **Conventional Commits**, small and clear: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`.
+  Commit after each working step.
+- One step at a time — build what's asked, then stop. A technical PM directs the build and reviews
+  output; explain trade-offs, don't silently pick one.
+- Stack/style, PII rules, the firewall, and scope boundaries all live in @AGENTS.md.

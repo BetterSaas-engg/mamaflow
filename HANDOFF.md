@@ -3,6 +3,95 @@
 **Date:** 2026-06-13
 **Status:** Phase 0 complete. End-to-end pipeline verified against a live Gmail inbox.
 
+> **Update 2026-06-22 — AI-assistant setup + repo restructure.** All backend code now lives under
+> `backend/` (package still `api`, imports unchanged; run commands from `backend/`). AI-assistant
+> scaffolding installed at the repo root: `AGENTS.md` (canonical, cross-tool), `CLAUDE.md`/`GEMINI.md`,
+> `.claude/` + `.agents/`, and the deterministic firewall (`scripts/firewall-guard.sh` wired as a
+> Claude PostToolUse hook + `.githooks/pre-commit` backstop). Added 4 project skills
+> (firewall-privacy-audit, testing, code-maintainability-audit, db-migrations) and `DECISIONS.md`
+> (D1–D21; **D9/D20 frontend platform under review** — PWA+Capacitor vs Expo vs Flutter). Memory model:
+> docs + discipline (manual) — update this file after each step. Verified in a venv:
+> `cd backend && python -m pytest` → **7 passed**. Tracked on branch `chore/ai-assistant-setup`
+> (pushed to origin; not merged to main). See `AI-SETUP.md`.
+
+> **Update 2026-06-22 — Frontend platform decided: Flutter.** Mobile-first (iOS + Android), web later;
+> push via FCM; mobile Google OAuth (tokens stay server-side). Supersedes D9/D20 (decision-log flip +
+> D22/D23 done). Design:
+> `docs/superpowers/specs/2026-06-22-frontend-platform-flutter-design.md`. **Backend team:** the
+> required API contract + changes are in `docs/backend-requirements-from-frontend.md`. Frontend work
+> on branch `feat/frontend-flutter` (pushed). **Phase 0** (D9/D20→Flutter + D22/D23; firewall-guard
+> Dart patterns) and **Phase 1** (Flutter app foundation: `frontend/` scaffold + api_client / auth /
+> isolated ads / push / app-shell; 7 tests pass; `flutter analyze` clean) are **done**. **Phase 2**
+> (on-device Firebase/FCM, Google sign-in, AdMob, wired to the backend endpoints) is pending accounts
+> + backend. Plan: `docs/superpowers/plans/2026-06-22-frontend-flutter-foundation.md`.
+
+> **Update 2026-06-23 — Backend Phase 1 (frontend integration) A–D done.** Built the API contract the
+> Flutter app needs (`docs/backend-requirements-from-frontend.md`), TDD, on branch
+> `feat/backend-mobile-integration`. **44 tests pass.** New env in `backend/.env` (real Railway/Google/
+> Anthropic + a generated `SECRET_KEY`; gitignored). Commits: A `88a9317`, B `f6a59ed`, C `9663ab7`,
+> D `de9614c`.
+> - **A (auth):** `User` model; JWT issue/verify + `get_current_user` Bearer dependency;
+>   `POST /api/v1/auth/google/mobile` (serverAuthCode → Gmail tokens server-side D4 → app JWT D23).
+> - **B (items):** single `items` table (D24); `persist_items` (idempotent per message);
+>   `GET /api/v1/items?from&to&type`, `PATCH /api/v1/items/{id}` {status open/done/dismissed, D25}.
+> - **C (hardening):** all sync endpoints JWT-gated, `?email=` dropped; **metadata-first Gmail fetch**
+>   (blocked senders' bodies never pulled — fixes the long-standing gap); `POST /api/v1/sync`
+>   (fetch→blocklist→redact→extract→persist); blocking I/O moved off the loop via `asyncio.to_thread`.
+> - **D (push):** `Device` model + `POST /api/v1/devices/register` (de-dupe by fcm_token). FCM sender +
+>   APScheduler reminder job DEFERRED until Firebase service account + APNs key exist (D26/D27).
+> - **Migrations:** 3 new (users `105f5ff0fdeb`, items `b2c1d0e9f8a7`, devices `c3d2e1f0a9b8`), verified
+>   as valid Postgres DDL offline. **NOT yet applied to the shared Railway DB** — run
+>   `cd backend && python -m alembic upgrade head` (Claude was blocked from writing the shared DB).
+> - Security-audited (A, B, C, D — no BLOCKs). Test DB = in-memory SQLite (`tests/conftest.py`).
+>   Tracked from the C/D audit for the FCM-sender phase: device re-registration reassigns `user_id`
+>   by `fcm_token` ("last registration wins" — required for device-switch; residual low-impact hijack
+>   risk, inert until pushes are sent — see `services/devices.py` docstring).
+
+> **Update 2026-07-02 — E2E VERIFIED ON A REAL iPHONE.** Full loop working on device: Google
+> sign-in → Gmail fetch (metadata-first) → blocklist → Presidio → Claude → Railway Postgres →
+> app list (sync idempotent; done/dismiss working). Migrations applied to Railway (head
+> `c3d2e1f0a9b8`). Root `README.md` added (setup + run-on-device instructions).
+> - **D28 pivot:** mobile sign-in is now direct OAuth2 auth-code + **PKCE** via flutter_web_auth_2
+>   (google_sign_in 7.x cannot mint a Gmail-scoped serverAuthCode on iOS — verified in plugin
+>   source). Backend `POST /auth/google/mobile` takes `{code, code_verifier}`; redirect_uri derived
+>   server-side; new env `GOOGLE_IOS_CLIENT_ID`. PKCE flow security-audited (no BLOCKs; findings
+>   fixed in 829bb67).
+> - iOS config: deployment target 15.0 (Firebase SPM); Info.plist has GIDClientID + reversed-id URL
+>   scheme + GADApplicationIdentifier (Google TEST id — replace before release) + dev-only ATS.
+> - ~~Extraction date formats~~ **FIXED** (`1e1bba2`, `a702b09`): prompt forces ISO YYYY-MM-DD
+>   (Date header added to the wrap for reference) + deterministic `normalize_item_date` backstop.
+>   Audit of the change found + fixed a BLOCK: spoofed Date headers (OverflowError) could 500 a
+>   whole sync batch.
+> - ~~JWT expiry UX~~ **FIXED** (`f2b0b7c`): 401 → auto sign-out (ApiClient onUnauthorized →
+>   SessionController → auth gate shows sign-in).
+> - **Known issues (next up):**
+>   1. Gmail tokens in-memory — backend restart loses them (re-sign-in required); Secret Manager is
+>      the Phase-1 fix.
+>   2. Sync is synchronous on the request path (~50 Claude calls worst case) — background processing
+>      still pending (Phase 1 list).
+>   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
+>      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
+>      output hardening.
+> - Branch `feat/backend-mobile-integration` **pushed** (40 commits). PR pending: `gh` is
+>   authenticated as a non-collaborator account — open via
+>   https://github.com/BetterSaas-engg/mamaflow/pull/new/feat/backend-mobile-integration
+>   or re-auth `gh` as the collaborator account.
+
+> **Update 2026-06-24 — Frontend mobile sign-in wired to the backend.** Flutter app now does the
+> D23 flow: `google_sign_in` 7.x → serverAuthCode → `POST /api/v1/auth/google/mobile` → store the
+> app JWT (secure storage; Gmail tokens stay server-side, D4). New: `auth/google_auth_codes.dart`
+> (plugin boundary, testable), `auth/auth_service.dart`, `auth/session_controller.dart`,
+> `ui/sign_in_screen.dart` + `ui/home_screen.dart`; `app.dart` gates on session via `AuthGate`;
+> `ProviderScope` moved to `main.dart`. **`flutter analyze` clean; 13 tests pass.**
+> **Native config still required before a real device sign-in works** (console/Xcode, not code):
+> 1. **Build-time:** `--dart-define=GOOGLE_SERVER_CLIENT_ID=<WEB OAuth client id>` and
+>    `--dart-define=API_BASE_URL=<backend url>`.
+> 2. **iOS:** create an iOS OAuth client; set `GIDClientID` (iOS client id) + add its reversed-client-id
+>    as a URL scheme in `ios/Runner/Info.plist`.
+> 3. **Android:** register the app's SHA-1 against an Android OAuth client in the same GCP project.
+> 4. Confirm the backend `exchange_server_auth_code` `redirect_uri` against the real client (often
+>    `''`/`postmessage` for the offline-code flow) on the first device test.
+
 ---
 
 ## What Mamaflow Does
@@ -89,8 +178,13 @@ The pipeline makes a deliberate distinction between **harm-class PII** (always r
 
 ## File Map
 
+> Restructured 2026-06-22: all backend code now lives under `backend/` (package still `api`, imports
+> unchanged). Run all commands from `backend/`. `backend/` also holds `alembic/`, `alembic.ini`,
+> `requirements.txt`, `tests/`, `.env.example`. AI-assistant config + firewall guard live at the repo
+> root (`AGENTS.md`, `.claude/`, `.agents/`, `scripts/`, `.githooks/`; see `AI-SETUP.md`).
+
 ```
-api/
+backend/api/
 ├── main.py                         # FastAPI app + lifespan
 ├── auth/
 │   ├── oauth.py                    # Google OAuth with PKCE
@@ -118,12 +212,12 @@ api/
     ├── content_wrapper.py          # Layer 3 — Nonce-delimited injection defense + extraction prompt
     └── ai_extractor.py             # Claude Sonnet 4.6 API call + JSON parsing
 
-alembic/
+backend/alembic/
 ├── env.py                          # Async migration runner
 └── versions/
     └── f11c1892443a_create_sender_allowlist_and_sender_.py
 
-tests/
+backend/tests/
 └── test_content_wrapper.py         # 7 security tests for prompt injection defense
 ```
 
@@ -131,11 +225,11 @@ tests/
 
 ## Environment Setup
 
-1. Copy `.env.example` to `.env` and fill in real values:
+1. Copy `backend/.env.example` to `backend/.env` and fill in real values:
    - `DATABASE_URL` — Railway PostgreSQL connection string (standard `postgresql://` prefix; the app converts to `postgresql+asyncpg://` at runtime)
    - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — GCP OAuth 2.0 credentials with Gmail readonly scope
    - `ANTHROPIC_API_KEY` — Anthropic API key for Claude Sonnet 4.6
-2. `pip install -r requirements.txt`
+2. `cd backend && pip install -r requirements.txt` — run all commands below from `backend/`
 3. `python -m alembic upgrade head` — creates sender_allowlist and sender_blocklist tables
 4. `python -m api.db.seed` — inserts 27 default blocklist rows (idempotent)
 5. `uvicorn api.main:app --reload` — starts the server on port 8000
