@@ -72,10 +72,25 @@
 >   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
 >      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
 >      output hardening.
-> - Branch `feat/backend-mobile-integration` **pushed** (40 commits). PR pending: `gh` is
->   authenticated as a non-collaborator account — open via
->   https://github.com/BetterSaas-engg/mamaflow/pull/new/feat/backend-mobile-integration
->   or re-auth `gh` as the collaborator account.
+> - Branch `feat/backend-mobile-integration` pushed; **PR #1 open**
+>   (https://github.com/BetterSaas-engg/mamaflow/pull/1) — merge pending PM review.
+
+## Roadmap (agreed 2026-07-03)
+
+| Track | What | Gate / status |
+|-------|------|---------------|
+| A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | in progress |
+| C | Deploy backend to Railway (Dockerfile, https, prod SECRET_KEY; kills dev ATS/cleartext exceptions) | after A1 |
+| A2 | Background sync (APScheduler per D26) + incremental sync (last-synced message id) | after C |
+| A3 | Extraction hardening: tool-use/structured output (also fixes the raw_text log nit), model review, Batch API backfill, rate limiting | with A2 |
+| B | Android OAuth client (SHA-1 `8B:E8:14:1C:…`) → app on Android; Firebase/FCM sender + APNs (D22/D26/D27) | needs console/accounts (user) |
+| **E0** | **Google OAuth verification** — restricted `gmail.readonly` scope: Limited-Use compliance + annual CASA assessment. Long lead time; start once deployed. Prereq for leaving Testing mode AND for ads | after C |
+| E | Ad layer (D19/D21: in-house/static + AdMob npa=1, firewalled) + Stripe ad-free tier | ONLY after E0 ("ships and verifies") |
+| F | Encrypted family vault (photos, reports, vaccination cards) | later phase, own design cycle (locked scope boundary) |
+| D | App polish: calendar view, sync-progress UX, settings/delete-account | anytime |
+
+Hygiene queue: remove deprecated `blocked_domains.json` (Phase 2); decide fate of the legacy
+no-JWT web callback in `oauth.py`.
 
 > **Update 2026-06-24 — Frontend mobile sign-in wired to the backend.** Flutter app now does the
 > D23 flow: `google_sign_in` 7.x → serverAuthCode → `POST /api/v1/auth/google/mobile` → store the
