@@ -1,0 +1,14 @@
+# Secrets — NEVER in the image (*.json guards a stray service-account key;
+# nothing in api/ reads a .json file at runtime — blocked_domains.json is
+# deprecated, DB is source of truth)
+.env
+.env.*
+*.json
+
+# Local dev
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/

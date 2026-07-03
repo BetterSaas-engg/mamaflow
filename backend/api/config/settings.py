@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
+    # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on
+    # restart) or "secret-manager" (GCP, requires gcp_project_id + ADC creds).
+    token_store_backend: str = "memory"
+    gcp_project_id: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

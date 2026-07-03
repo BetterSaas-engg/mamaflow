@@ -6,6 +6,7 @@ uvicorn[standard]>=0.30.0
 google-auth>=2.34.0
 google-auth-oauthlib>=1.2.1
 google-api-python-client>=2.149.0
+google-cloud-secret-manager>=2.20.0   # durable Gmail token store (D4)
 
 # Auth
 PyJWT>=2.9.0
