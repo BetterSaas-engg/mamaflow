@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # restart) or "secret-manager" (GCP, requires gcp_project_id + ADC creds).
     token_store_backend: str = "memory"
     gcp_project_id: str = ""
+    # Min seconds between completed syncs per user (each sync = a full 30-day
+    # metadata scan; repeated triggers are a cost/DoS vector — A2 audit).
+    sync_cooldown_seconds: int = 60
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

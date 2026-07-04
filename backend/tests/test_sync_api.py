@@ -95,6 +95,9 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
 async def test_resync_skips_already_synced_before_extraction(client, db, monkeypatch):
     """Incremental: the second sync must not re-fetch bodies or re-extract
     messages that are already persisted — dedup happens BEFORE Claude."""
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
     monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
@@ -125,6 +128,24 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
 
     listed = await client.get("/api/v1/items", headers=_auth(token))
     assert len(listed.json()["items"]) == 1
+
+
+async def test_sync_cooldown_returns_429(client, db, monkeypatch):
+    """A3 audit finding: repeated POST /sync triggered a full 30-day metadata
+    scan each time. A per-user cooldown between completed syncs closes it."""
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 60)
+    _, token = await _user_with_token(db)
+    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: [])
+    monkeypatch.setattr(sync_router, "fetch_message_bodies", lambda email, ids: {})
+
+    first = await client.post("/api/v1/sync", headers=_auth(token))
+    second = await client.post("/api/v1/sync", headers=_auth(token))
+
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert "Retry-After" in second.headers
 
 
 async def test_failed_sync_reports_failed_status(client, db, monkeypatch):

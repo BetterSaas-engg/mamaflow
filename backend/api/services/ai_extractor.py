@@ -7,7 +7,6 @@ structured FamilyEvent objects.
 
 import datetime
 import email.utils
-import json
 import logging
 import re
 
@@ -15,10 +14,24 @@ import anthropic
 
 from api.config.settings import settings
 from api.schemas.family_event import ExtractionResponse
-from api.services.content_wrapper import build_extraction_prompt, wrap_untrusted_content
+from api.services.content_wrapper import (
+    _EXTRACTION_JSON_SCHEMA,
+    build_extraction_prompt,
+    wrap_untrusted_content,
+)
 
 _MODEL = "claude-sonnet-4-6"
-_MAX_TOKENS = 1024
+_MAX_TOKENS = 2048  # strict schema emits explicit nulls for every field
+
+# Strict tool use: the tool's schema-locked input IS the extraction result.
+# Guarantees valid, schema-conforming output — no JSON-in-text parsing, and
+# the locked schema doubles as injection defense (additionalProperties: false).
+_EXTRACTION_TOOL = {
+    "name": "record_family_items",
+    "description": "Record the family events and action items extracted from the email.",
+    "strict": True,
+    "input_schema": _EXTRACTION_JSON_SCHEMA,
+}
 
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 _log = logging.getLogger(__name__)
@@ -113,16 +126,21 @@ def extract_events(
     message = _client.messages.create(
         model=_MODEL,
         max_tokens=_MAX_TOKENS,
+        tools=[_EXTRACTION_TOOL],
+        tool_choice={"type": "tool", "name": _EXTRACTION_TOOL["name"]},
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw_text = message.content[0].text
+    tool_use = next((b for b in message.content if b.type == "tool_use"), None)
+    if tool_use is None:
+        # Audit rule: types only, never values — model output is never logged.
+        _log.warning("extraction returned no tool_use block; treating as empty")
+        return ExtractionResponse(events=[])
 
     try:
-        data = json.loads(raw_text)
-        result = ExtractionResponse.model_validate(data)
-    except (json.JSONDecodeError, Exception) as e:
-        _log.warning("Failed to parse Claude response: %s — raw: %s", e, raw_text[:200])
+        result = ExtractionResponse.model_validate(tool_use.input)
+    except Exception:
+        _log.warning("extraction tool input failed schema validation; treating as empty")
         return ExtractionResponse(events=[])
 
     # Normalize dates to ISO (backstop for the prompt rule) and stamp the

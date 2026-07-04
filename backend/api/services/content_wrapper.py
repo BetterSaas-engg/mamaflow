@@ -22,7 +22,13 @@ _EXTRACTION_JSON_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["item_type"],
+                # Strict tool use: every property listed in required; optional
+                # semantics are expressed via nullable types (explicit null).
+                "required": [
+                    "item_type", "event_title", "action_required", "date",
+                    "time", "location", "child_name", "event_type",
+                    "source_sender", "source_email_link",
+                ],
                 "additionalProperties": False,
                 "properties": {
                     "item_type": {
@@ -140,9 +146,10 @@ populated.
 
 ## OUTPUT FORMAT — STRICT
 
-Respond with ONLY a JSON object matching this exact schema. No \
-markdown fencing, no commentary, no extra keys, no explanation. \
-If no family events or actions are found, return {{"events": []}}.
+Record your findings by calling the record_family_items tool with a \
+payload matching this exact schema. Every field must be present — use \
+null for anything unknown. No extra keys. If no family events or \
+actions are found, call the tool with {{"events": []}}.
 
 Schema:
 ```
