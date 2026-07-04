@@ -48,4 +48,8 @@ class ApiClient {
     final r = await _dio.patch(path, data: body);
     return Map<String, dynamic>.from(r.data as Map);
   }
+
+  Future<void> delete(String path) async {
+    await _dio.delete(path);
+  }
 }
