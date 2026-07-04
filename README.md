@@ -120,7 +120,8 @@ appear in the list; mark them done/dismiss via the row menu. The session JWT exp
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/v1/auth/google/mobile` | PKCE code → app JWT (creates the user) |
-| POST | `/api/v1/sync` | fetch → filter → redact → extract → persist (idempotent) |
+| POST | `/api/v1/sync` | starts a background sync (202; incremental — already-synced messages skipped before extraction) |
+| GET | `/api/v1/sync/status` | poll the background sync: idle/running/done/failed + counts |
 | GET | `/api/v1/items?from=&to=&type=` | the user's events/actions |
 | PATCH | `/api/v1/items/{id}` | `{"status": "done"\|"dismissed"}` |
 | POST | `/api/v1/devices/register` | FCM token registration (sender deferred, D27) |

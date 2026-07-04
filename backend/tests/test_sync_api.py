@@ -1,7 +1,16 @@
-"""Tests for the JWT-gated sync endpoints + POST /sync (Phase C, req #6).
+"""Tests for background + incremental sync (A2).
 
-Gmail and the Claude extractor are mocked — tests never hit live APIs.
-The load-bearing assertion: a blocked sender's body is never fetched.
+Contract:
+  POST /api/v1/sync         -> 202 {"status": "started"}  (extraction runs as a
+                               background task; with ASGITransport background
+                               tasks finish before the response reaches us, so
+                               status is terminal right after the POST)
+  GET  /api/v1/sync/status  -> per-user {"status": idle|running|done|failed, counts}
+
+Gmail + Claude are mocked — never live. Load-bearing invariants:
+  - a blocked sender's body is never fetched (metadata-first)
+  - already-synced messages are skipped BEFORE body fetch/extraction (no
+    repeat Claude spend)
 """
 
 from api.auth.jwt import create_access_token
@@ -20,27 +29,27 @@ async def _user_with_token(db, email="parent@example.com"):
     return user, create_access_token(subject=str(user.id), email=user.email)
 
 
-async def test_extract_requires_auth(client):
-    resp = await client.get("/api/v1/sync/extract")
-    assert resp.status_code == 401
+async def test_sync_requires_auth(client):
+    assert (await client.post("/api/v1/sync")).status_code == 401
+    assert (await client.get("/api/v1/sync/status")).status_code == 401
 
 
 async def test_preview_requires_auth(client):
-    resp = await client.get("/api/v1/sync/preview")
-    assert resp.status_code == 401
+    assert (await client.get("/api/v1/sync/preview")).status_code == 401
+    assert (await client.get("/api/v1/sync/preview-filtered")).status_code == 401
+    assert (await client.get("/api/v1/sync/extract")).status_code == 401
 
 
-async def test_preview_filtered_requires_auth(client):
-    resp = await client.get("/api/v1/sync/preview-filtered")
-    assert resp.status_code == 401
+async def test_status_is_idle_before_any_sync(client, db):
+    _, token = await _user_with_token(db)
+
+    resp = await client.get("/api/v1/sync/status", headers=_auth(token))
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "idle"
 
 
-async def test_sync_requires_auth(client):
-    resp = await client.post("/api/v1/sync")
-    assert resp.status_code == 401
-
-
-async def test_sync_persists_items_and_never_fetches_blocked_bodies(client, db, monkeypatch):
+async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch):
     user, token = await _user_with_token(db)
     db.add(SenderBlocklist(domain="blocked.com", category="financial", reason="test"))
     await db.commit()
@@ -51,53 +60,85 @@ async def test_sync_persists_items_and_never_fetches_blocked_bodies(client, db, 
     ]
     monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
 
-    captured = {}
+    fetched_ids = []
 
     def fake_bodies(email, ids):
-        captured["ids"] = list(ids)
-        return {mid: "body text" for mid in ids}
+        fetched_ids.extend(ids)
+        return {mid: "body" for mid in ids}
 
     monkeypatch.setattr(sync_router, "fetch_message_bodies", fake_bodies)
-
-    def fake_extract(body, subject, sender, message_id="", email_date=""):
-        return ExtractionResponse(
-            events=[FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")]
-        )
-
-    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
-
-    resp = await client.post("/api/v1/sync", headers=_auth(token))
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["messages_scanned"] == 2
-    assert body["blocked"] == 1
-    assert body["items_created"] == 1
-
-    # Metadata-first invariant: the blocked sender's body was NOT fetched.
-    assert captured["ids"] == ["m_ok"]
-
-    # Items were persisted and are listable.
-    listed = await client.get("/api/v1/items", headers=_auth(token))
-    assert len(listed.json()["items"]) == 1
-
-
-async def test_sync_is_idempotent_on_resync(client, db, monkeypatch):
-    user, token = await _user_with_token(db)
-    metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
-    monkeypatch.setattr(sync_router, "fetch_message_bodies", lambda email, ids: {i: "b" for i in ids})
     monkeypatch.setattr(
         sync_router, "extract_events",
         lambda body, subject, sender, message_id="", email_date="": ExtractionResponse(
-            events=[FamilyItem(item_type="event", event_title="X")]
+            events=[FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")]
         ),
     )
 
-    first = await client.post("/api/v1/sync", headers=_auth(token))
-    second = await client.post("/api/v1/sync", headers=_auth(token))
+    resp = await client.post("/api/v1/sync", headers=_auth(token))
 
-    assert first.json()["items_created"] == 1
-    assert second.json()["items_created"] == 0  # already synced
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "started"
+
+    status = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+    assert status["status"] == "done"
+    assert status["messages_scanned"] == 2
+    assert status["blocked"] == 1
+    assert status["items_created"] == 1
+
+    # Metadata-first invariant: the blocked sender's body was never fetched.
+    assert fetched_ids == ["m_ok"]
+
     listed = await client.get("/api/v1/items", headers=_auth(token))
     assert len(listed.json()["items"]) == 1
+
+
+async def test_resync_skips_already_synced_before_extraction(client, db, monkeypatch):
+    """Incremental: the second sync must not re-fetch bodies or re-extract
+    messages that are already persisted — dedup happens BEFORE Claude."""
+    user, token = await _user_with_token(db)
+    metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
+    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
+
+    body_calls = []
+    extract_calls = []
+
+    def fake_bodies(email, ids):
+        body_calls.append(list(ids))
+        return {i: "b" for i in ids}
+
+    def fake_extract(body, subject, sender, message_id="", email_date=""):
+        extract_calls.append(message_id)
+        return ExtractionResponse(events=[FamilyItem(item_type="event", event_title="X")])
+
+    monkeypatch.setattr(sync_router, "fetch_message_bodies", fake_bodies)
+    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
+
+    await client.post("/api/v1/sync", headers=_auth(token))
+    first = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+    await client.post("/api/v1/sync", headers=_auth(token))
+    second = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+
+    assert first["items_created"] == 1
+    assert second["items_created"] == 0
+    assert extract_calls == ["m1"]  # extraction ran ONCE, not twice
+    assert body_calls == [["m1"], []] or body_calls == [["m1"]]  # no re-fetch
+
+    listed = await client.get("/api/v1/items", headers=_auth(token))
+    assert len(listed.json()["items"]) == 1
+
+
+async def test_failed_sync_reports_failed_status(client, db, monkeypatch):
+    _, token = await _user_with_token(db)
+
+    def boom(email):
+        raise ValueError("gmail exploded")
+
+    monkeypatch.setattr(sync_router, "fetch_recent_metadata", boom)
+
+    resp = await client.post("/api/v1/sync", headers=_auth(token))
+    assert resp.status_code == 202
+
+    status = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+    assert status["status"] == "failed"
+    # Sanitized: no internal exception text leaks to the client.
+    assert "exploded" not in (status.get("error") or "")
