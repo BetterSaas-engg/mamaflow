@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../auth/session_controller.dart';
 import '../items/filters.dart';
 import '../items/grouping.dart';
 import '../items/item.dart';
 import '../items/items_controller.dart';
 import '../items/sync_service.dart';
 import 'item_detail_screen.dart';
+import 'settings_screen.dart';
 
 /// The signed-in home: the user's items as a grouped agenda (Overdue / Today /
 /// This week / Later / To-do), filterable by child/type, with a "Show
@@ -44,9 +44,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             },
           ),
           IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(sessionProvider.notifier).signOut(),
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
           ),
         ],
       ),

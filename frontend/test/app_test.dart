@@ -42,6 +42,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Mamaflow'), findsWidgets);
-    expect(find.byTooltip('Sign out'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsOneWidget);
   });
 }
