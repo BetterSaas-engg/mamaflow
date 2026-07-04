@@ -87,7 +87,7 @@
 | **E0** | **Google OAuth verification** — restricted `gmail.readonly` scope: Limited-Use compliance + annual CASA assessment. Long lead time; start once deployed. Prereq for leaving Testing mode AND for ads | after C |
 | E | Ad layer (D19/D21: in-house/static + AdMob npa=1, firewalled) + Stripe ad-free tier | ONLY after E0 ("ships and verifies") |
 | F | Encrypted family vault (photos, reports, vaccination cards) | later phase, own design cycle (locked scope boundary) |
-| D | App polish: calendar view, sync-progress UX, settings/delete-account | anytime |
+| D | App polish: calendar view, sync-progress UX, settings/delete-account | **Slice 1 DONE 2026-07-04** — "Useful items view": grouped agenda home (Overdue / Today / This week / Later / To-do), client-side child/type filter chips, tappable item-detail screen (opens the source email via `url_launcher`, https-only), and a `?status=` filter on `GET /items` with a "Show completed" toggle (open→done; dismissed stay hidden). Spec `docs/superpowers/specs/2026-07-04-useful-items-view-design.md`, plan `docs/superpowers/plans/2026-07-04-useful-items-view.md`. Backend 72 tests, frontend 41; per-task + whole-feature security audit PASS (firewall/D5/D4 clean; https launcher guard added). **Remaining Track D:** month **calendar** tab (fast-follow), sync-progress UX (backend `/sync/status` already returns messages_scanned/processed/items_created), settings + **delete-account** (also an E0 prereq). |
 
 Hygiene queue: remove deprecated `blocked_domains.json` (Phase 2); decide fate of the legacy
 no-JWT web callback in `oauth.py`.
