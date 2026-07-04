@@ -1,3 +1,5 @@
+import 'package:dio/dio.dart';
+
 import '../core/api_client.dart';
 
 class SyncFailedException implements Exception {
@@ -22,7 +24,15 @@ class SyncService {
     Duration pollInterval = const Duration(seconds: 2),
     int maxPolls = 90,
   }) async {
-    await _api.postJson('/api/v1/sync', const <String, dynamic>{});
+    try {
+      await _api.postJson('/api/v1/sync', const <String, dynamic>{});
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 429) {
+        // Server-side cooldown between syncs (each is a full inbox scan).
+        throw const SyncFailedException('Synced recently — try again in a minute.');
+      }
+      rethrow;
+    }
 
     for (var i = 0; i < maxPolls; i++) {
       if (pollInterval > Duration.zero) {

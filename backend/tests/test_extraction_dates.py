@@ -70,8 +70,11 @@ def test_prompt_requires_iso_dates():
 
 
 def test_extract_events_normalizes_prose_dates(monkeypatch):
+    block = MagicMock()
+    block.type = "tool_use"
+    block.input = {"events": [{"item_type": "event", "event_title": "Soccer", "date": "July 5th (Saturday)"}]}
     fake = MagicMock()
-    fake.content = [MagicMock(text='{"events":[{"item_type":"event","event_title":"Soccer","date":"July 5th (Saturday)"}]}')]
+    fake.content = [block]
     monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: fake)
 
     out = ai_extractor.extract_events(

@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mamaflow/core/api_client.dart';
 import 'package:mamaflow/items/sync_service.dart';
@@ -54,6 +55,24 @@ void main() {
     final created = await svc.runUntilDone(pollInterval: Duration.zero);
 
     expect(created, 0);
+  });
+
+  test('a 429 cooldown becomes a friendly SyncFailedException', () async {
+    final api = _MockApi();
+    final opts = RequestOptions(path: '/api/v1/sync');
+    when(() => api.postJson(any(), any())).thenThrow(DioException(
+      requestOptions: opts,
+      response: Response(requestOptions: opts, statusCode: 429),
+    ));
+
+    final svc = SyncService(api);
+
+    await expectLater(
+      svc.runUntilDone(pollInterval: Duration.zero),
+      throwsA(isA<SyncFailedException>().having(
+          (e) => e.message, 'message', contains('recently'))),
+    );
+    verifyNever(() => api.getJson(any())); // no pointless polling after 429
   });
 
   test('runUntilDone gives up after maxPolls', () async {
