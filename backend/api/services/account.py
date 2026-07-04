@@ -4,6 +4,7 @@ Deletion is soft (deleted_at), per the locked AGENTS.md rule. Gmail access is
 truly severed by revoking the token at Google. Revocation is best-effort — a
 failure never blocks the local delete, and no token value is ever logged."""
 
+import asyncio
 import datetime
 import logging
 
@@ -52,7 +53,7 @@ async def delete_account(db: AsyncSession, user: User) -> None:
     creds = token_store.get_token(user.email)
     if creds is not None:
         try:
-            revoke_gmail_token(creds)
+            await asyncio.to_thread(revoke_gmail_token, creds)
         except Exception as exc:  # defensive: revoke_gmail_token shouldn't raise
             _log.warning("gmail token revoke raised (%s)", type(exc).__name__)
     token_store.delete_token(user.email)
