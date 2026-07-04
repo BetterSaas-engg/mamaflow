@@ -38,7 +38,7 @@ class InMemoryTokenStore:
         return list(self._tokens)
 
     def delete(self, user_email: str) -> None:
-        self._tokens.pop(user_email, None)
+        self._tokens.pop(user_email.strip().lower(), None)
 
 
 class SecretManagerTokenStore:
