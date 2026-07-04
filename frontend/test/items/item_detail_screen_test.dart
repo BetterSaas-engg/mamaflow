@@ -16,6 +16,24 @@ Widget _host(Item item, {UrlOpener? opener}) => ProviderScope(
     );
 
 void main() {
+  group('isLaunchableUrl', () {
+    test('accepts https URLs', () {
+      expect(isLaunchableUrl('https://mail.google.com/x'), true);
+    });
+
+    test('rejects http URLs', () {
+      expect(isLaunchableUrl('http://mail.google.com/x'), false);
+    });
+
+    test('rejects javascript: scheme', () {
+      expect(isLaunchableUrl('javascript:alert(1)'), false);
+    });
+
+    test('rejects malformed URLs', () {
+      expect(isLaunchableUrl('not a url'), false);
+    });
+  });
+
   testWidgets('shows item fields', (tester) async {
     await tester.pumpWidget(_host(_item(link: 'https://mail.google.com/x')));
     expect(find.text('Dentist'), findsOneWidget);

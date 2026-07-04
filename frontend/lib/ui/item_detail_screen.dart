@@ -9,8 +9,16 @@ import '../items/items_controller.dart';
 /// widget tests don't hit the platform channel.
 typedef UrlOpener = Future<bool> Function(String url);
 
-Future<bool> _defaultOpener(String url) =>
-    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+/// Only https links are launchable — defense-in-depth so a non-https or
+/// custom-scheme URL can never be handed to the OS launcher, regardless of
+/// where the link came from. Today the only caller passes the server-stamped
+/// Gmail https link.
+bool isLaunchableUrl(String url) => Uri.tryParse(url)?.scheme == 'https';
+
+Future<bool> _defaultOpener(String url) {
+  if (!isLaunchableUrl(url)) return Future.value(false);
+  return launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+}
 
 /// Full detail for one item: every populated field + an "Open source email"
 /// action (Gmail deep link) + mark done/dismiss.
