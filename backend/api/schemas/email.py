@@ -52,8 +52,14 @@ class ExtractionPreview(BaseModel):
     total_events: int
 
 
-class SyncResult(BaseModel):
-    messages_scanned: int
-    blocked: int
-    processed: int
-    items_created: int
+class SyncStartResponse(BaseModel):
+    status: str  # "started" | "already_running"
+
+
+class SyncStatusResponse(BaseModel):
+    status: str  # "idle" | "running" | "done" | "failed"
+    messages_scanned: int | None = None
+    blocked: int | None = None
+    processed: int | None = None
+    items_created: int | None = None
+    error: str | None = None

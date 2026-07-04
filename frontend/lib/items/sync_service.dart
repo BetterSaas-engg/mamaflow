@@ -1,16 +1,44 @@
 import '../core/api_client.dart';
 
-/// Triggers a server-side inbox sync (fetch -> blocklist -> redact -> extract
-/// -> persist) for the authenticated user. POST /api/v1/sync; the user is
-/// derived from the JWT, so the body is empty.
+class SyncFailedException implements Exception {
+  const SyncFailedException(this.message);
+  final String message;
+  @override
+  String toString() => 'SyncFailedException: $message';
+}
+
+/// Triggers a server-side inbox sync and polls it to completion. The sync runs
+/// as a backend background task (POST /api/v1/sync -> 202 started); progress is
+/// read from GET /api/v1/sync/status until done/failed.
 class SyncService {
   SyncService(this._api);
 
   final ApiClient _api;
 
-  /// Returns the number of newly-created items.
-  Future<int> run() async {
-    final resp = await _api.postJson('/api/v1/sync', const <String, dynamic>{});
-    return (resp['items_created'] as num?)?.toInt() ?? 0;
+  /// Starts a sync (tolerating one already in flight) and polls until it
+  /// finishes. Returns the number of newly created items; throws
+  /// [SyncFailedException] on server-reported failure or timeout.
+  Future<int> runUntilDone({
+    Duration pollInterval = const Duration(seconds: 2),
+    int maxPolls = 90,
+  }) async {
+    await _api.postJson('/api/v1/sync', const <String, dynamic>{});
+
+    for (var i = 0; i < maxPolls; i++) {
+      if (pollInterval > Duration.zero) {
+        await Future<void>.delayed(pollInterval);
+      }
+      final status = await _api.getJson('/api/v1/sync/status');
+      switch (status['status'] as String?) {
+        case 'done':
+          return (status['items_created'] as num?)?.toInt() ?? 0;
+        case 'failed':
+          throw SyncFailedException(
+              status['error'] as String? ?? 'Sync failed. Try again.');
+        default:
+          continue; // running (or idle race) — keep polling
+      }
+    }
+    throw const SyncFailedException('Sync timed out. Pull to refresh later.');
   }
 }

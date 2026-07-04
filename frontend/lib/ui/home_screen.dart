@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/session_controller.dart';
 import '../items/item.dart';
 import '../items/items_controller.dart';
+import '../items/sync_service.dart';
 
 /// The signed-in home: the user's extracted events + actions, with mark
 /// done/dismiss and pull-to-refresh. Reads GET /api/v1/items.
@@ -57,12 +58,21 @@ class HomeScreen extends ConsumerWidget {
 
   Future<void> _sync(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(const SnackBar(content: Text('Syncing inbox…')));
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Syncing inbox… (first sync can take a couple of minutes)'),
+      duration: Duration(seconds: 8),
+    ));
     try {
-      final created = await ref.read(syncServiceProvider).run();
+      // Runs server-side in the background; this polls status to completion.
+      final created = await ref.read(syncServiceProvider).runUntilDone();
       await ref.read(itemsProvider.notifier).refresh();
+      messenger.hideCurrentSnackBar();
       messenger.showSnackBar(SnackBar(content: Text('Synced — $created new item(s)')));
+    } on SyncFailedException catch (e) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
+      messenger.hideCurrentSnackBar();
       messenger.showSnackBar(const SnackBar(content: Text('Sync failed. Try again.')));
     }
   }

@@ -8,6 +8,26 @@ from api.models.user import User
 from api.schemas.family_event import FamilyItem
 
 
+async def existing_message_ids(
+    db: AsyncSession,
+    user_id,
+    message_ids: list[str],
+) -> set[str]:
+    """Which of these Gmail message ids are already persisted for this user.
+    Used to skip already-synced messages BEFORE body fetch / Claude extraction
+    (incremental sync) — dedup must happen before the expensive calls."""
+    if not message_ids:
+        return set()
+    result = await db.execute(
+        select(Item.source_message_id).where(
+            Item.user_id == user_id,
+            Item.source_message_id.in_(message_ids),
+            Item.deleted_at.is_(None),
+        )
+    )
+    return {row[0] for row in result}
+
+
 async def persist_items(
     db: AsyncSession,
     user: User,

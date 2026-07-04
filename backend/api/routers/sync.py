@@ -7,24 +7,30 @@ fetched (AGENTS.md / D13). Blocking I/O is run off the event loop.
 """
 
 import asyncio
+import logging
+import uuid
 
-from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, BackgroundTasks, Depends
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.auth.dependencies import get_current_user
-from api.db.session import get_db
+from api.db.session import get_db, get_session_factory
 from api.models.user import User
 from api.schemas.email import (
     EmailMetadata,
     ExtractionPreview,
     FilteredPreview,
-    SyncResult,
+    SyncStartResponse,
+    SyncStatusResponse,
 )
+from api.services import sync_state
 from api.services.ai_extractor import extract_events
 from api.services.gmail_reader import fetch_message_bodies, fetch_recent_metadata
-from api.services.items import persist_items
+from api.services.items import existing_message_ids, persist_items
 from api.services.privacy_pipeline import redact_pii
 from api.services.sender_blocklist import is_blocked_sender
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
@@ -132,38 +138,87 @@ async def extract_emails(
     }
 
 
-@router.post("", response_model=SyncResult)
-async def run_sync(
+async def _run_sync_job(
+    user_id: uuid.UUID,
+    user_email: str,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The background sync: fetch → blocklist → incremental skip → redact →
+    extract → persist. Opens its own session (the request's is closed by now).
+    Reports progress/outcome via sync_state; errors are sanitized."""
+    try:
+        async with session_factory() as db:
+            user = await db.get(User, user_id)
+            if user is None:
+                sync_state.fail(user_id, "user not found")
+                return
+
+            metadata = await asyncio.to_thread(fetch_recent_metadata, user_email)
+            passed, blocked = await _classify(metadata, db)
+
+            # Incremental: drop already-synced messages BEFORE body fetch and
+            # extraction — dedup after the Claude call would still spend tokens.
+            already = await existing_message_ids(
+                db, user_id, [m["message_id"] for m, _ in passed]
+            )
+            new_passed = [
+                (m, s) for m, s in passed if m["message_id"] not in already
+            ]
+
+            bodies = await asyncio.to_thread(
+                fetch_message_bodies,
+                user_email,
+                [m["message_id"] for m, _ in new_passed],
+            )
+
+            items_created = 0
+            for msg, _status in new_passed:
+                redaction = redact_pii(bodies.get(msg["message_id"], ""))
+                extraction = await asyncio.to_thread(
+                    extract_events,
+                    redaction.redacted_text,
+                    msg["subject"],
+                    msg["sender"],
+                    msg["message_id"],
+                    msg["date"],
+                )
+                saved = await persist_items(db, user, msg["message_id"], extraction.events)
+                items_created += len(saved)
+
+            sync_state.finish(
+                user_id,
+                messages_scanned=len(metadata),
+                blocked=len(blocked),
+                processed=len(new_passed),
+                items_created=items_created,
+            )
+    except Exception:
+        # Full detail to server logs; only a sanitized message to the client.
+        _log.exception("sync failed for user %s", user_id)
+        sync_state.fail(user_id, "Sync failed. Try again.")
+
+
+@router.post("", response_model=SyncStartResponse, status_code=202)
+async def start_sync(
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ):
-    """Fetch → blocklist → redact → extract → persist for the authed user.
+    """Kick off a background sync for the authed user; poll GET /sync/status."""
+    if not sync_state.try_start(user.id):
+        return SyncStartResponse(status="already_running")
+    background.add_task(_run_sync_job, user.id, user.email, session_factory)
+    return SyncStartResponse(status="started")
 
-    Idempotent per message (persist_items skips already-synced messages)."""
-    metadata = await asyncio.to_thread(fetch_recent_metadata, user.email)
-    passed, blocked = await _classify(metadata, db)
 
-    bodies = await asyncio.to_thread(
-        fetch_message_bodies, user.email, [m["message_id"] for m, _ in passed]
-    )
-
-    items_created = 0
-    for msg, _status in passed:
-        redaction = redact_pii(bodies.get(msg["message_id"], ""))
-        extraction = await asyncio.to_thread(
-            extract_events,
-            redaction.redacted_text,
-            msg["subject"],
-            msg["sender"],
-            msg["message_id"],
-            msg["date"],
-        )
-        saved = await persist_items(db, user, msg["message_id"], extraction.events)
-        items_created += len(saved)
-
-    return SyncResult(
-        messages_scanned=len(metadata),
-        blocked=len(blocked),
-        processed=len(passed),
-        items_created=items_created,
+@router.get("/status", response_model=SyncStatusResponse)
+async def get_sync_status(user: User = Depends(get_current_user)):
+    state = sync_state.get_state(user.id)
+    return SyncStatusResponse(
+        status=state.status,
+        messages_scanned=state.messages_scanned,
+        blocked=state.blocked,
+        processed=state.processed,
+        items_created=state.items_created,
+        error=state.error,
     )
