@@ -7,7 +7,11 @@ import 'package:mamaflow/items/items_service.dart';
 import 'package:mamaflow/ui/home_screen.dart';
 import 'package:mocktail/mocktail.dart';
 
-class _MockItemsService extends Mock implements ItemsService {}
+class _MockService extends Mock implements ItemsService {}
+
+Item _item(String id, {String? date, String? child}) => Item(
+    id: id, itemType: 'event', status: 'open', eventTitle: id,
+    date: date, childName: child);
 
 Widget _host(ItemsService svc) => ProviderScope(
       overrides: [itemsServiceProvider.overrideWithValue(svc)],
@@ -15,33 +19,32 @@ Widget _host(ItemsService svc) => ProviderScope(
     );
 
 void main() {
-  testWidgets('renders items returned by the service', (tester) async {
-    final svc = _MockItemsService();
-    when(() => svc.list()).thenAnswer((_) async => const [
-          Item(
-            id: 'i1',
-            itemType: 'event',
-            status: 'open',
-            eventTitle: 'Soccer practice',
-            date: '2026-06-20',
-            eventType: 'sports',
-          ),
-        ]);
+  setUpAll(() => registerFallbackValue('open'));
+
+  testWidgets('renders section headers and chips', (tester) async {
+    final svc = _MockService();
+    when(() => svc.list(status: any(named: 'status'))).thenAnswer((_) async => [
+      _item('nodate', child: 'Emma'),
+      _item('later', date: '2026-12-31', child: 'Charlie'),
+    ]);
 
     await tester.pumpWidget(_host(svc));
     await tester.pumpAndSettle();
 
-    expect(find.text('Soccer practice'), findsOneWidget);
-    expect(find.textContaining('sports'), findsOneWidget);
+    expect(find.text('Later'), findsOneWidget);
+    expect(find.text('To-do — no date'), findsOneWidget);
+    expect(find.widgetWithText(FilterChip, 'Emma'), findsOneWidget);
+    expect(find.widgetWithText(FilterChip, 'Charlie'), findsOneWidget);
   });
 
   testWidgets('shows empty state when there are no items', (tester) async {
-    final svc = _MockItemsService();
-    when(() => svc.list()).thenAnswer((_) async => const <Item>[]);
+    final svc = _MockService();
+    when(() => svc.list(status: any(named: 'status')))
+        .thenAnswer((_) async => <Item>[]);
 
     await tester.pumpWidget(_host(svc));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('No items yet'), findsOneWidget);
+    expect(find.textContaining('No items'), findsOneWidget);
   });
 }
