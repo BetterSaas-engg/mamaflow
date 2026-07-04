@@ -64,4 +64,17 @@ void main() {
     expect(captured[0], '/api/v1/items/i1');
     expect(captured[1], {'status': 'done'});
   });
+
+  test('list passes status as a query param', () async {
+    final api = _MockApi();
+    when(() => api.getJson(any(), query: any(named: 'query')))
+        .thenAnswer((_) async => {'items': []});
+    final svc = ItemsService(api);
+
+    await svc.list(status: 'done');
+
+    final captured = verify(() => api.getJson('/api/v1/items',
+        query: captureAny(named: 'query'))).captured.single as Map;
+    expect(captured['status'], 'done');
+  });
 }
