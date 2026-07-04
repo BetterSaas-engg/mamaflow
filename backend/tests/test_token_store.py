@@ -136,3 +136,59 @@ def test_store_is_built_lazily(monkeypatch):
 
     token_store.list_users()  # first real use builds the backend
     assert built == ["proj-123"]
+
+
+# --- delete tests ---
+
+
+def test_in_memory_delete_removes_token():
+    store = InMemoryTokenStore()
+    store.store("a@b.com", {"token": "x"})
+    assert store.get("a@b.com") == {"token": "x"}
+
+    store.delete("a@b.com")
+
+    assert store.get("a@b.com") is None
+
+
+def test_in_memory_delete_absent_is_noop():
+    store = InMemoryTokenStore()
+    store.delete("nobody@b.com")  # must not raise
+    assert store.get("nobody@b.com") is None
+
+
+def test_in_memory_delete_normalizes_key():
+    store = InMemoryTokenStore()
+    store.store("A@B.com ", {"token": "x"})
+    store.delete("A@B.com ")  # same form as stored (but not normalized by delete) must delete
+    assert store.get("a@b.com") is None
+
+
+def test_secret_manager_delete_swallows_not_found_and_evicts_cache(sm_client):
+    store = _store(sm_client)
+    sm_client.delete_secret.side_effect = gcp_exceptions.NotFound("absent")
+    store._cache["a@b.com"] = {"token": "x"}
+    store.delete("a@b.com")  # NotFound swallowed -> no raise
+    assert "a@b.com" not in store._cache
+    assert sm_client.delete_secret.called
+
+
+def test_secret_manager_delete_sanitizes_api_error(sm_client, caplog):
+    store = _store(sm_client)
+    sm_client.delete_secret.side_effect = gcp_exceptions.GoogleAPIError("boom-SECRETVAL")
+    with caplog.at_level("WARNING"):
+        store.delete("a@b.com")  # must not raise
+    assert "SECRETVAL" not in caplog.text  # exception detail not logged
+
+
+def test_module_delete_token_uses_active_store(monkeypatch):
+    from api.auth import token_store
+
+    store = InMemoryTokenStore()
+    monkeypatch.setattr(token_store, "_store", store)
+    monkeypatch.setattr(token_store, "_get_store", lambda: store)
+    store.store("c@d.com", {"token": "y"})
+
+    token_store.delete_token("c@d.com")
+
+    assert store.get("c@d.com") is None

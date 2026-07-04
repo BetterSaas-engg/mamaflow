@@ -72,3 +72,6 @@ frontend/**/google-services.json
 frontend/**/GoogleService-Info.plist
 frontend/android/key.properties
 frontend/**/*.keystore
+
+# Visual brainstorming companion (mockups, ephemeral)
+.superpowers/

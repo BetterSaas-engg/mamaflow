@@ -8,11 +8,12 @@ class ItemsService {
 
   final ApiClient _api;
 
-  Future<List<Item>> list({String? from, String? to, String? type}) async {
+  Future<List<Item>> list({String? from, String? to, String? type, String? status}) async {
     final query = <String, dynamic>{
       'from': ?from,
       'to': ?to,
       'type': ?type,
+      'status': ?status,
     };
     final resp = await _api.getJson(
       '/api/v1/items',

@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,10 +19,13 @@ async def get_items(
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None, alias="to"),
     type: str | None = Query(None),
+    status: Literal["open", "done", "dismissed"] | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    items = await list_items(db, user, date_from=from_, date_to=to, item_type=type)
+    items = await list_items(
+        db, user, date_from=from_, date_to=to, item_type=type, status=status
+    )
     return ItemListResponse(items=[item_to_read(i) for i in items])
 
 

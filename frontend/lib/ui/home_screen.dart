@@ -1,37 +1,54 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../auth/session_controller.dart';
+import '../items/filters.dart';
+import '../items/grouping.dart';
 import '../items/item.dart';
 import '../items/items_controller.dart';
 import '../items/sync_service.dart';
+import 'item_detail_screen.dart';
+import 'settings_screen.dart';
 
-/// The signed-in home: the user's extracted events + actions, with mark
-/// done/dismiss and pull-to-refresh. Reads GET /api/v1/items.
-class HomeScreen extends ConsumerWidget {
+/// The signed-in home: the user's items as a grouped agenda (Overdue / Today /
+/// This week / Later / To-do), filterable by child/type, with a "Show
+/// completed" toggle. Rows tap through to [ItemDetailScreen].
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
+  @override
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  String? _child; // single-select chip: one of child/type is set at a time
+  String? _type;
+  bool _completed = false;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final items = ref.watch(itemsProvider);
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         icon: const Icon(Icons.sync),
         label: const Text('Sync inbox'),
-        onPressed: () => _sync(context, ref),
+        onPressed: () => _sync(context),
       ),
       appBar: AppBar(
         title: const Text('Mamaflow'),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh),
-            onPressed: () => ref.read(itemsProvider.notifier).refresh(),
+            tooltip: _completed ? 'Show open' : 'Show completed',
+            icon: Icon(_completed ? Icons.inbox : Icons.done_all),
+            onPressed: () {
+              setState(() => _completed = !_completed);
+              ref.read(itemsProvider.notifier).showCompleted(_completed);
+            },
           ),
           IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(sessionProvider.notifier).signOut(),
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
           ),
         ],
       ),
@@ -44,26 +61,85 @@ class HomeScreen extends ConsumerWidget {
         ),
         data: (list) => RefreshIndicator(
           onRefresh: () => ref.read(itemsProvider.notifier).refresh(),
-          child: list.isEmpty
-              ? _emptyList()
-              : ListView.separated(
-                  itemCount: list.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) => _ItemTile(item: list[i]),
-                ),
+          child: _body(list),
         ),
       ),
     );
   }
 
-  Future<void> _sync(BuildContext context, WidgetRef ref) async {
+  Widget _body(List<Item> all) {
+    final filtered = applyChipFilter(all, child: _child, type: _type);
+    final sections = groupItems(filtered, DateTime.now());
+    final children = childValues(all);
+    final types = typeValues(all);
+
+    return CustomScrollView(
+      slivers: [
+        if (children.isNotEmpty || types.isNotEmpty)
+          SliverToBoxAdapter(child: _chips(children, types)),
+        if (sections.isEmpty)
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: Text('No items yet.\nPull down to refresh.',
+                textAlign: TextAlign.center)),
+          ),
+        for (final section in sections) ...[
+          SliverToBoxAdapter(child: _header(section.title)),
+          SliverList.separated(
+            itemCount: section.items.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, i) => _ItemTile(item: section.items[i]),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _chips(List<String> children, List<String> types) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            FilterChip(
+              label: const Text('All'),
+              selected: _child == null && _type == null,
+              onSelected: (_) => setState(() { _child = null; _type = null; }),
+            ),
+            for (final c in children) ...[
+              const SizedBox(width: 6),
+              FilterChip(
+                label: Text(c),
+                selected: _child == c,
+                onSelected: (_) => setState(() { _child = c; _type = null; }),
+              ),
+            ],
+            for (final t in types) ...[
+              const SizedBox(width: 6),
+              FilterChip(
+                label: Text(t),
+                selected: _type == t,
+                onSelected: (_) => setState(() { _type = t; _child = null; }),
+              ),
+            ],
+          ],
+        ),
+      );
+
+  Widget _header(String title) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Text(title,
+            style: const TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5,
+                color: Colors.grey)),
+      );
+
+  Future<void> _sync(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(const SnackBar(
       content: Text('Syncing inbox… (first sync can take a couple of minutes)'),
       duration: Duration(seconds: 8),
     ));
     try {
-      // Runs server-side in the background; this polls status to completion.
       final created = await ref.read(syncServiceProvider).runUntilDone();
       await ref.read(itemsProvider.notifier).refresh();
       messenger.hideCurrentSnackBar();
@@ -76,14 +152,6 @@ class HomeScreen extends ConsumerWidget {
       messenger.showSnackBar(const SnackBar(content: Text('Sync failed. Try again.')));
     }
   }
-
-  // A scrollable so pull-to-refresh works even when there are no items.
-  Widget _emptyList() => ListView(
-        children: const [
-          SizedBox(height: 120),
-          Center(child: Text('No items yet.\nPull down to refresh.', textAlign: TextAlign.center)),
-        ],
-      );
 }
 
 class _ItemTile extends ConsumerWidget {
@@ -111,6 +179,9 @@ class _ItemTile extends ConsumerWidget {
             : null,
       ),
       subtitle: subtitleParts.isEmpty ? null : Text(subtitleParts.join('  ·  ')),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ItemDetailScreen(item: item)),
+      ),
       trailing: closed
           ? Chip(label: Text(item.status))
           : PopupMenuButton<String>(

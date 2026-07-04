@@ -11,15 +11,26 @@ final itemsServiceProvider =
 final syncServiceProvider =
     Provider<SyncService>((ref) => SyncService(ref.watch(apiClientProvider)));
 
-/// Loads the user's items and exposes mutations (mark done/dismiss) that
-/// refresh the list. Backed by GET/PATCH /api/v1/items.
+/// Loads the user's items and exposes mutations. Fetches open items by default;
+/// [showCompleted] flips to done items ("Show completed" toggle on the home).
 class ItemsController extends AsyncNotifier<List<Item>> {
+  String _status = 'open';
+
+  String get statusFilter => _status;
+
   @override
-  Future<List<Item>> build() => ref.read(itemsServiceProvider).list();
+  Future<List<Item>> build() => ref.read(itemsServiceProvider).list(status: _status);
 
   Future<void> refresh() async {
     state = const AsyncLoading();
-    state = await AsyncValue.guard(() => ref.read(itemsServiceProvider).list());
+    state = await AsyncValue.guard(
+        () => ref.read(itemsServiceProvider).list(status: _status));
+  }
+
+  /// Toggle between open items (false) and completed/done items (true).
+  Future<void> showCompleted(bool completed) async {
+    _status = completed ? 'done' : 'open';
+    await refresh();
   }
 
   Future<void> setStatus(String id, String status) async {

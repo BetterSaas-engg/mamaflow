@@ -37,6 +37,9 @@ class InMemoryTokenStore:
     def list_users(self) -> list[str]:
         return list(self._tokens)
 
+    def delete(self, user_email: str) -> None:
+        self._tokens.pop(user_email.strip().lower(), None)
+
 
 class SecretManagerTokenStore:
     """One GCP secret per user: gmail-token-<sha256(email)>.
@@ -116,6 +119,20 @@ class SecretManagerTokenStore:
         # users are listable. Nothing currently depends on a global listing.
         return list(self._cache)
 
+    def delete(self, user_email: str) -> None:
+        from google.api_core import exceptions as gcp_exceptions
+
+        self._cache.pop(user_email.strip().lower(), None)
+        name = f"projects/{self._project}/secrets/{self.secret_id_for(user_email)}"
+        try:
+            self._client.delete_secret(request={"name": name})
+        except gcp_exceptions.NotFound:
+            pass  # already absent — idempotent
+        except gcp_exceptions.GoogleAPIError as exc:
+            # Sanitized, non-fatal: a failed revoke/delete must not block account
+            # deletion. GCP internals stay out of the logged message.
+            _log.warning("token delete: secret manager delete failed (%s)", type(exc).__name__)
+
 
 # Built lazily on first use — NOT at import time — so a dev .env selecting
 # secret-manager can't couple test collection / module import to live GCP
@@ -151,3 +168,7 @@ def get_token(user_email: str) -> dict | None:
 
 def list_users() -> list[str]:
     return _get_store().list_users()
+
+
+def delete_token(user_email: str) -> None:
+    _get_store().delete(user_email)
