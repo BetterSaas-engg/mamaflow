@@ -78,6 +78,7 @@ async def list_items(
     date_from: str | None = None,
     date_to: str | None = None,
     item_type: str | None = None,
+    status: str | None = None,
 ) -> list[Item]:
     """List a user's non-deleted items, newest event first.
 
@@ -88,6 +89,8 @@ async def list_items(
 
     if item_type is not None:
         query = query.where(Item.item_type == item_type)
+    if status is not None:
+        query = query.where(Item.status == status)
     if date_from is not None:
         query = query.where(Item.event_date >= date_from)
     if date_to is not None:

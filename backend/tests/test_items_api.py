@@ -90,3 +90,34 @@ async def test_patch_rejects_invalid_status(client, db):
     )
 
     assert resp.status_code == 422
+
+
+async def test_get_items_filters_by_status(client, db):
+    user, token = await _user_with_token(db)
+    await persist_items(
+        db, user, "m1",
+        [FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")],
+    )
+    await persist_items(
+        db, user, "m2",
+        [FamilyItem(item_type="action", action_required="RSVP")],
+    )
+    # Mark the second item done.
+    listed = (await client.get("/api/v1/items", headers=_auth(token))).json()["items"]
+    action = next(i for i in listed if i["item_type"] == "action")
+    await client.patch(f"/api/v1/items/{action['id']}",
+                       headers=_auth(token), json={"status": "done"})
+
+    open_only = await client.get("/api/v1/items?status=open", headers=_auth(token))
+    done_only = await client.get("/api/v1/items?status=done", headers=_auth(token))
+    all_items = await client.get("/api/v1/items", headers=_auth(token))
+
+    assert [i["item_type"] for i in open_only.json()["items"]] == ["event"]
+    assert [i["item_type"] for i in done_only.json()["items"]] == ["action"]
+    assert len(all_items.json()["items"]) == 2  # omitted => unchanged
+
+
+async def test_get_items_rejects_invalid_status(client, db):
+    _, token = await _user_with_token(db)
+    resp = await client.get("/api/v1/items?status=bogus", headers=_auth(token))
+    assert resp.status_code == 422
