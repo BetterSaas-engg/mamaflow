@@ -136,3 +136,35 @@ def test_store_is_built_lazily(monkeypatch):
 
     token_store.list_users()  # first real use builds the backend
     assert built == ["proj-123"]
+
+
+# --- delete tests ---
+
+
+def test_in_memory_delete_removes_token():
+    store = InMemoryTokenStore()
+    store.store("a@b.com", {"token": "x"})
+    assert store.get("a@b.com") == {"token": "x"}
+
+    store.delete("a@b.com")
+
+    assert store.get("a@b.com") is None
+
+
+def test_in_memory_delete_absent_is_noop():
+    store = InMemoryTokenStore()
+    store.delete("nobody@b.com")  # must not raise
+    assert store.get("nobody@b.com") is None
+
+
+def test_module_delete_token_uses_active_store(monkeypatch):
+    from api.auth import token_store
+
+    store = InMemoryTokenStore()
+    monkeypatch.setattr(token_store, "_store", store)
+    monkeypatch.setattr(token_store, "_get_store", lambda: store)
+    store.store("c@d.com", {"token": "y"})
+
+    token_store.delete_token("c@d.com")
+
+    assert store.get("c@d.com") is None
