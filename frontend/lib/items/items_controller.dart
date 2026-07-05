@@ -41,3 +41,10 @@ class ItemsController extends AsyncNotifier<List<Item>> {
 
 final itemsProvider =
     AsyncNotifierProvider<ItemsController, List<Item>>(ItemsController.new);
+
+/// Open dated items for the Calendar tab. Independent of the Agenda's
+/// "Show completed" toggle (which mutates itemsProvider's status filter), so
+/// the calendar always shows open events regardless of the Agenda view state.
+final calendarItemsProvider = FutureProvider<List<Item>>((ref) async {
+  return ref.watch(itemsServiceProvider).list(status: 'open');
+});

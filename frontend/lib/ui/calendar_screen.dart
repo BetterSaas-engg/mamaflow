@@ -49,7 +49,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final items = ref.watch(itemsProvider);
+    final items = ref.watch(calendarItemsProvider);
     return Scaffold(
       appBar: AppBar(
         title: Text('${_monthNames[_visible.month - 1]} ${_visible.year}'),

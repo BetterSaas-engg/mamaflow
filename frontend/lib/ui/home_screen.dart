@@ -153,6 +153,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
       final created = _syncStatus?.itemsCreated ?? 0;
       await ref.read(itemsProvider.notifier).refresh();
+      ref.invalidate(calendarItemsProvider);
       setState(() => _syncStatus = null);
       messenger.showSnackBar(SnackBar(content: Text('Synced — $created new item(s)')));
     } on SyncFailedException catch (e) {
