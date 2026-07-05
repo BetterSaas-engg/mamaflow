@@ -36,6 +36,7 @@ class ItemsController extends AsyncNotifier<List<Item>> {
   Future<void> setStatus(String id, String status) async {
     await ref.read(itemsServiceProvider).updateStatus(id, status);
     await refresh();
+    ref.invalidate(calendarItemsProvider);
   }
 }
 
