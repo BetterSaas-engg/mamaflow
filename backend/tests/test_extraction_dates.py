@@ -52,6 +52,25 @@ def test_malicious_date_header_never_crashes():
     assert normalize_item_date("2026-07-05", evil) == "2026-07-05"
 
 
+_RFC = "Tue, 01 Jul 2026 09:00:00 -0400"
+
+
+def test_normalize_strips_bundled_time():
+    assert normalize_item_date("July 5th (Saturday) 10:00 AM", _RFC) == "2026-07-05"
+    assert normalize_item_date("July 5 at 10am", _RFC) == "2026-07-05"
+    assert normalize_item_date("January 5, 2026 3:30pm", _RFC) == "2026-01-05"
+
+
+def test_normalize_does_not_eat_bare_day():
+    # No time token -> the day number must survive.
+    assert normalize_item_date("July 5", _RFC) == "2026-07-05"
+
+
+def test_normalize_iso_and_unparseable_unchanged():
+    assert normalize_item_date("2026-07-05", _RFC) == "2026-07-05"
+    assert normalize_item_date("sometime next week", _RFC) == "sometime next week"
+
+
 # --- prompt + wrap carry the date contract ---
 
 

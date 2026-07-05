@@ -43,6 +43,12 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # "July 5th (Saturday)" -> "July 5": drop parentheticals + ordinal suffixes.
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
 _ORDINAL = re.compile(r"(\d{1,2})(st|nd|rd|th)\b", re.IGNORECASE)
+# A trailing clock time bundled into a date string ("July 5 10:00 AM").
+# Requires a colon or am/pm so a bare day number is never mistaken for a time.
+_TRAILING_TIME = re.compile(
+    r"\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*$|\s+(?:at\s+)?\d{1,2}:\d{2}\s*$",
+    re.IGNORECASE,
+)
 
 _DATE_FORMATS_WITH_YEAR = ["%B %d %Y", "%b %d %Y", "%d %B %Y", "%m/%d/%Y", "%m/%d/%y"]
 _DATE_FORMATS_YEARLESS = ["%B %d", "%b %d"]
@@ -67,6 +73,7 @@ def normalize_item_date(value: str | None, email_date: str = "") -> str | None:
     cleaned = _ORDINAL.sub(r"\1", cleaned)
     cleaned = cleaned.replace(",", " ")
     cleaned = " ".join(cleaned.split())
+    cleaned = _TRAILING_TIME.sub("", cleaned).strip()
 
     for fmt in _DATE_FORMATS_WITH_YEAR:
         try:
