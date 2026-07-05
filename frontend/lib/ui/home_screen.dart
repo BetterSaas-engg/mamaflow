@@ -22,6 +22,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   String? _child; // single-select chip: one of child/type is set at a time
   String? _type;
   bool _completed = false;
+  SyncStatus? _syncStatus; // non-null while a sync is in flight
 
   @override
   Widget build(BuildContext context) {
@@ -52,17 +53,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ],
       ),
-      body: items.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _Centered(
-          message: 'Could not load items.',
-          actionLabel: 'Retry',
-          onAction: () => ref.read(itemsProvider.notifier).refresh(),
-        ),
-        data: (list) => RefreshIndicator(
-          onRefresh: () => ref.read(itemsProvider.notifier).refresh(),
-          child: _body(list),
-        ),
+      body: Column(
+        children: [
+          if (_syncStatus != null) _SyncProgressCard(status: _syncStatus!),
+          Expanded(
+            child: items.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => _Centered(
+                message: 'Could not load items.',
+                actionLabel: 'Retry',
+                onAction: () => ref.read(itemsProvider.notifier).refresh(),
+              ),
+              data: (list) => RefreshIndicator(
+                onRefresh: () => ref.read(itemsProvider.notifier).refresh(),
+                child: _body(list),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -135,20 +143,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _sync(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(const SnackBar(
-      content: Text('Syncing inbox… (first sync can take a couple of minutes)'),
-      duration: Duration(seconds: 8),
-    ));
+    setState(() => _syncStatus = const SyncStatus(status: 'running'));
     try {
-      final created = await ref.read(syncServiceProvider).runUntilDone();
+      await for (final s in ref.read(syncServiceProvider).run()) {
+        if (s.status == 'failed') {
+          throw SyncFailedException(s.error ?? 'Sync failed. Try again.');
+        }
+        setState(() => _syncStatus = s);
+      }
+      final created = _syncStatus?.itemsCreated ?? 0;
       await ref.read(itemsProvider.notifier).refresh();
-      messenger.hideCurrentSnackBar();
+      setState(() => _syncStatus = null);
       messenger.showSnackBar(SnackBar(content: Text('Synced — $created new item(s)')));
     } on SyncFailedException catch (e) {
-      messenger.hideCurrentSnackBar();
+      setState(() => _syncStatus = null);
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
-      messenger.hideCurrentSnackBar();
+      setState(() => _syncStatus = null);
       messenger.showSnackBar(const SnackBar(content: Text('Sync failed. Try again.')));
     }
   }
@@ -192,6 +203,35 @@ class _ItemTile extends ConsumerWidget {
                 PopupMenuItem(value: 'dismissed', child: Text('Dismiss')),
               ],
             ),
+    );
+  }
+}
+
+class _SyncProgressCard extends StatelessWidget {
+  const _SyncProgressCard({required this.status});
+  final SyncStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = status.toProcess;
+    final done = status.processed;
+    final value = (total != null && total > 0 && done != null) ? done / total : null;
+    final line = total == null
+        ? 'Syncing your inbox…'
+        : 'Scanned ${status.messagesScanned ?? 0} · processed ${done ?? 0} / $total · ${status.itemsCreated ?? 0} items';
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(line, style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: value),
+          ],
+        ),
+      ),
     );
   }
 }
