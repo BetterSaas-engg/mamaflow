@@ -172,8 +172,16 @@ async def _run_sync_job(
                 [m["message_id"] for m, _ in new_passed],
             )
 
+            sync_state.progress(
+                user_id,
+                messages_scanned=len(metadata),
+                to_process=len(new_passed),
+                processed=0,
+                items_created=0,
+            )
+
             items_created = 0
-            for msg, _status in new_passed:
+            for _i, (msg, _status) in enumerate(new_passed):
                 redaction = redact_pii(bodies.get(msg["message_id"], ""))
                 extraction = await asyncio.to_thread(
                     extract_events,
@@ -185,6 +193,13 @@ async def _run_sync_job(
                 )
                 saved = await persist_items(db, user, msg["message_id"], extraction.events)
                 items_created += len(saved)
+                sync_state.progress(
+                    user_id,
+                    messages_scanned=len(metadata),
+                    to_process=len(new_passed),
+                    processed=_i + 1,
+                    items_created=items_created,
+                )
 
             sync_state.finish(
                 user_id,
@@ -232,6 +247,7 @@ async def get_sync_status(user: User = Depends(get_current_user)):
         messages_scanned=state.messages_scanned,
         blocked=state.blocked,
         processed=state.processed,
+        to_process=state.to_process,
         items_created=state.items_created,
         error=state.error,
     )

@@ -61,5 +61,6 @@ class SyncStatusResponse(BaseModel):
     messages_scanned: int | None = None
     blocked: int | None = None
     processed: int | None = None
+    to_process: int | None = None
     items_created: int | None = None
     error: str | None = None
