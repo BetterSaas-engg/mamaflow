@@ -1,3 +1,4 @@
+import datetime
 from types import SimpleNamespace
 
 from api.models.device import Device
@@ -51,3 +52,33 @@ def test_format_digest_caps_and_includes_time():
     assert title == "Tomorrow's schedule"
     assert body.startswith("E0 10:00 AM · E1 · ")
     assert body.endswith("and 2 more")  # 5 shown + "and 2 more"
+
+
+async def test_soft_deleted_device_excluded(db):
+    user = await get_or_create_user(db, "sd@x.com")
+    live = Device(user_id=user.id, fcm_token="live-tok", platform="ios")
+    dead = Device(
+        user_id=user.id, fcm_token="dead-tok", platform="android",
+        deleted_at=datetime.datetime.now(datetime.UTC),
+    )
+    db.add(live)
+    db.add(dead)
+    await db.commit()
+
+    # device_tokens returns only the live token; the user still appears once.
+    assert await reminders.device_tokens(db, user) == ["live-tok"]
+    users = await reminders.users_with_devices(db)
+    assert [u.email for u in users] == ["sd@x.com"]
+
+
+async def test_user_with_only_soft_deleted_device_excluded(db):
+    user = await get_or_create_user(db, "gone@x.com")
+    db.add(Device(
+        user_id=user.id, fcm_token="only-dead", platform="ios",
+        deleted_at=datetime.datetime.now(datetime.UTC),
+    ))
+    await db.commit()
+
+    # No live devices -> user is not selected and has no tokens.
+    assert await reminders.device_tokens(db, user) == []
+    assert user.email not in {u.email for u in await reminders.users_with_devices(db)}
