@@ -82,3 +82,30 @@ async def test_tick_skips_user_without_tomorrow_events(db, session_factory, monk
     assert sent == []
     await db.refresh(user)
     assert user.last_reminder_date is None  # not advanced when nothing sent
+
+
+async def test_tick_isolates_per_user_failure(db, session_factory, monkeypatch):
+    monkeypatch.setattr(settings, "reminder_tz", "UTC")
+    monkeypatch.setattr(settings, "reminder_hour", 18)
+    await _seed(db, email="a@x.com", token="a-tok")
+    b = await _seed(db, email="b@x.com", token="b-tok")
+
+    sent = []
+    async def fake_send(tokens, title, body):
+        sent.append(tokens)
+        return []
+    monkeypatch.setattr(reminder_scheduler.push_sender, "send_digest", fake_send)
+
+    # Selection raises for user a only; b must still be processed (isolation).
+    real_tomorrow = reminder_scheduler.reminders.tomorrow_events
+    async def flaky(session, user, target):
+        if user.email == "a@x.com":
+            raise RuntimeError("boom for a")
+        return await real_tomorrow(session, user, target)
+    monkeypatch.setattr(reminder_scheduler.reminders, "tomorrow_events", flaky)
+
+    await reminder_scheduler.reminder_tick(session_factory, now=_NOW)  # must NOT raise
+
+    assert sent == [["b-tok"]]           # b still sent despite a failing
+    await db.refresh(b)
+    assert b.last_reminder_date == datetime.date(2026, 7, 6)
