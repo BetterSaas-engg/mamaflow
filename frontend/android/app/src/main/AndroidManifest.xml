@@ -25,6 +25,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- AdMob application id (google_mobile_ads). Required: its startup
+             ContentProvider crashes the process without it. Google's TEST app
+             id — replace with the real one before release (mirrors the iOS
+             GADApplicationIdentifier in Info.plist). The ad SDK stays
+             frontend-only and firewalled from content (D19). -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
+
         <!-- flutter_web_auth_2 callback: catches the Google OAuth redirect
              (mobile PKCE sign-in, D28). Scheme = the reversed iOS OAuth client
              id — Android reuses the iOS client, since the browser/Custom-Tab
