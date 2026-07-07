@@ -64,3 +64,40 @@ async def reminder_tick(session_factory, *, now: datetime.datetime | None = None
                 await db.commit()
         except Exception as exc:
             _log.warning("reminder tick failed for a user (%s)", type(exc).__name__)
+
+
+def _make_scheduler():
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    return AsyncIOScheduler()
+
+
+def start_scheduler() -> None:
+    """Start the hourly reminder job — only if push is configured (inert
+    otherwise, so the app runs exactly as today when unset)."""
+    global _scheduler
+    if not push_sender.is_configured():
+        _log.info("reminders: FIREBASE_CREDENTIALS_JSON unset — scheduler not started")
+        return
+    from apscheduler.triggers.cron import CronTrigger
+
+    from api.db.session import get_session_factory
+
+    session_factory = get_session_factory()
+    _scheduler = _make_scheduler()
+    _scheduler.add_job(
+        reminder_tick,
+        CronTrigger(minute=0),
+        kwargs={"session_factory": session_factory},
+        id="reminder_tick",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    _log.info("reminders: hourly scheduler started")
+
+
+def stop_scheduler() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
