@@ -86,7 +86,13 @@ a short-lived app JWT. All data endpoints require `Authorization: Bearer <jwt>`.
 GCP prerequisites (console, one-time): OAuth consent screen with the `gmail.readonly` scope
 + your account as a Test user, a **Web** OAuth client (backend), and an **iOS** OAuth client
 (the app; its reversed client id is the URL scheme in `frontend/ios/Runner/Info.plist`).
-An Android OAuth client (package + SHA-1) is needed when running on Android.
+
+**Android sign-in reuses the iOS OAuth client** — no separate Android OAuth client or SHA-1 is
+needed. Sign-in runs as a browser/Custom-Tab PKCE flow (`flutter_web_auth_2`, D28), and Google
+validates the redirect scheme, not the OS. Android just registers the same reversed-client-id
+scheme in `frontend/android/app/src/main/AndroidManifest.xml` (the `flutter_web_auth_2`
+`CallbackActivity`) and takes the same `--dart-define=GOOGLE_IOS_CLIENT_ID=...`. (An Android
+OAuth client + SHA-1 is only needed later for Firebase/FCM **push**, D22/D26/D27 — not for sign-in.)
 
 ## Frontend — run the app
 
