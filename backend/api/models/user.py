@@ -1,3 +1,5 @@
+import datetime
+
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.models.base import Base, TimestampMixin
@@ -8,3 +10,5 @@ class User(TimestampMixin, Base):
 
     # Email is the identity from Google sign-in; stored lowercase, unique.
     email: Mapped[str] = mapped_column(unique=True, nullable=False, index=True)
+    # Last date (in REMINDER_TZ) a reminder digest was sent — daily dedup.
+    last_reminder_date: Mapped[datetime.date | None] = mapped_column(nullable=True)
