@@ -6,6 +6,8 @@ import '../auth/auth_service.dart';
 import '../auth/google_auth_codes.dart';
 import '../auth/session_controller.dart';
 import '../auth/token_store.dart';
+import '../push/device_registrar.dart';
+import '../push/push_service.dart';
 import 'api_client.dart';
 
 const _baseUrl =
@@ -41,3 +43,8 @@ final authServiceProvider = Provider<AuthService>((ref) => AuthService(
       ref.watch(tokenStoreProvider),
       ref.watch(googleAuthCodesProvider),
     ));
+
+// FCM reminder push (D22/D27). start() is triggered by the signed-in shell.
+final pushServiceProvider = Provider<PushService>(
+  (ref) => PushService(DeviceRegistrar(ref.watch(apiClientProvider))),
+);

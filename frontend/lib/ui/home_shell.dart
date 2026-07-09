@@ -1,18 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/providers.dart';
 import 'calendar_screen.dart';
 import 'home_screen.dart';
 
 /// Signed-in shell: a bottom nav switching between the Agenda (grouped list)
 /// and the month Calendar. IndexedStack keeps each tab's state.
-class HomeShell extends StatefulWidget {
+class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
   @override
-  State<HomeShell> createState() => _HomeShellState();
+  ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Register this device for reminder push once we're in the signed-in shell.
+    // Idempotent and best-effort; failures never surface to the UI.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(pushServiceProvider).start();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
