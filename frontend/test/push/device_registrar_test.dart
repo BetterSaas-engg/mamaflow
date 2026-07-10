@@ -20,4 +20,17 @@ void main() {
     expect(captured[0], '/api/v1/devices/register');
     expect(captured[1], {'fcm_token': 'FCMTOKEN', 'platform': 'ios'});
   });
+
+  test('unregisters the device token with the backend', () async {
+    final api = _MockApi();
+    when(() => api.postVoid(any(), any())).thenAnswer((_) async {});
+    final registrar = DeviceRegistrar(api);
+
+    await registrar.unregister(fcmToken: 'FCMTOKEN');
+
+    final captured =
+        verify(() => api.postVoid(captureAny(), captureAny())).captured;
+    expect(captured[0], '/api/v1/devices/unregister');
+    expect(captured[1], {'fcm_token': 'FCMTOKEN'});
+  });
 }

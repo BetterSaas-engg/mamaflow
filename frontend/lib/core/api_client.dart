@@ -44,6 +44,11 @@ class ApiClient {
     return Map<String, dynamic>.from(r.data as Map);
   }
 
+  /// POST whose response carries no JSON body (e.g. a 204).
+  Future<void> postVoid(String path, Map<String, dynamic> body) async {
+    await _dio.post(path, data: body);
+  }
+
   Future<Map<String, dynamic>> patchJson(String path, Map<String, dynamic> body) async {
     final r = await _dio.patch(path, data: body);
     return Map<String, dynamic>.from(r.data as Map);
