@@ -27,19 +27,27 @@ def _build_gmail_client(user_email: str):
 
 def _extract_header(headers: list[dict], name: str) -> str:
     for h in headers:
-        if h["name"].lower() == name.lower():
+        if h.get("name", "").lower() == name.lower() and "value" in h:
             return h["value"]
     return ""
 
 
 def _extract_plain_text(payload: dict) -> str:
-    """Walk MIME parts to find text/plain and base64url-decode it."""
+    """Walk MIME parts to find text/plain and base64url-decode it.
+
+    The payload is attacker-influenceable (anyone can email the user), so a
+    malformed part degrades to "" — one bad message must never raise and fail
+    the whole sync batch.
+    """
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
         data = payload.get("body", {}).get("data", "")
         if data:
-            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+            try:
+                return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+            except (ValueError, TypeError):  # binascii.Error is a ValueError
+                return ""
         return ""
 
     # Recurse into multipart
