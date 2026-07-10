@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,8 +15,16 @@ from api.services.users import get_or_create_user
 
 _log = logging.getLogger(__name__)
 
-# Phase 0: in-memory PKCE state, same pattern as token_store
+# Phase 0: in-memory PKCE state, same pattern as token_store. Bounded because
+# abandoned logins (browser closed before the callback) never remove entries.
 _pending_states: dict[str, str] = {}
+_MAX_PENDING_STATES = 1000
+
+
+def _remember_state(state: str, verifier: str) -> None:
+    while len(_pending_states) >= _MAX_PENDING_STATES:
+        _pending_states.pop(next(iter(_pending_states)))  # oldest first
+    _pending_states[state] = verifier
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -48,28 +57,49 @@ async def google_login():
         access_type="offline",
         prompt="consent",
     )
-    _pending_states[state] = flow.code_verifier
+    _remember_state(state, flow.code_verifier)
     return RedirectResponse(auth_url)
 
 
 @router.get("/google/callback")
 async def google_callback(request: Request):
-    state = request.query_params["state"]
-    flow = _build_flow()
-    flow.code_verifier = _pending_states.pop(state)
-    flow.fetch_token(code=request.query_params["code"])
+    if request.query_params.get("error"):
+        # The user denied consent (or Google reported an OAuth error code).
+        raise HTTPException(status_code=400, detail="Google sign-in was not completed")
 
-    credentials = flow.credentials
-    # Decode the ID token to get the user's email
+    state = request.query_params.get("state")
+    code = request.query_params.get("code")
+    if not state or not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth state or code")
+
+    verifier = _pending_states.pop(state, None)
+    if verifier is None:
+        # Replay, or the in-memory state store was lost to a restart mid-login.
+        raise HTTPException(
+            status_code=400, detail="Sign-in session expired — start again"
+        )
+
+    flow = _build_flow()
+    flow.code_verifier = verifier
+
     from google.oauth2 import id_token
     from google.auth.transport.requests import Request as GoogleRequest
 
-    id_info = id_token.verify_oauth2_token(
-        credentials.id_token,
-        GoogleRequest(),
-        settings.google_client_id,
-    )
+    try:
+        # Both make sync network calls (token exchange; Google's signing-cert
+        # fetch) — run them off the event loop, as the mobile flow does.
+        await asyncio.to_thread(flow.fetch_token, code=code)
+        id_info = await asyncio.to_thread(
+            id_token.verify_oauth2_token,
+            flow.credentials.id_token,
+            GoogleRequest(),
+            settings.google_client_id,
+        )
+    except Exception as exc:
+        _log.warning("web oauth callback failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Google sign-in failed — try again")
 
+    credentials = flow.credentials
     user_email = id_info["email"]
 
     store_token(user_email, {
@@ -135,8 +165,6 @@ async def exchange_code_pkce(
     is derived server-side, never client-supplied. Identity is taken from the
     verified id_token, never trusted from the client.
     """
-    import asyncio
-
     import httpx
     from google.auth.transport.requests import Request as GoogleRequest
     from google.oauth2 import id_token
@@ -185,10 +213,17 @@ async def google_mobile_auth(
     try:
         creds_data, email = await exchange_code_pkce(payload.code, payload.code_verifier)
     except Exception as e:
-        # Log the real reason server-side (e.g. Google's invalid_grant /
-        # redirect_uri_mismatch body); return a generic 400 to the client.
-        reason = getattr(getattr(e, "response", None), "text", None) or repr(e)
-        _log.warning("mobile auth exchange failed: %s", reason)
+        # Types-only logging convention: Google's OAuth error *code* (a fixed
+        # enum like invalid_grant) is safe and diagnostic; the raw response
+        # body can echo request-derived text and is never logged.
+        reason = type(e).__name__
+        response = getattr(e, "response", None)
+        if response is not None:
+            try:
+                reason = f"{reason}/{response.json().get('error', '')}"
+            except Exception:
+                reason = f"{reason}/HTTP {response.status_code}"
+        _log.warning("mobile auth exchange failed (%s)", reason)
         raise HTTPException(status_code=400, detail="Invalid authorization code")
 
     user = await get_or_create_user(db, email)
