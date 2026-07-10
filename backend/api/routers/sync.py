@@ -15,15 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.auth.dependencies import get_current_user
 from api.config.settings import settings
-from api.db.session import get_db, get_session_factory
+from api.db.session import get_session_factory
 from api.models.user import User
-from api.schemas.email import (
-    EmailMetadata,
-    ExtractionPreview,
-    FilteredPreview,
-    SyncStartResponse,
-    SyncStatusResponse,
-)
+from api.schemas.email import SyncStartResponse, SyncStatusResponse
 from api.services import sync_state
 from api.services.ai_extractor import extract_events
 from api.services.gmail_reader import fetch_message_bodies, fetch_recent_metadata
@@ -62,81 +56,6 @@ async def _classify(metadata: list[dict], db: AsyncSession):
         else:
             passed.append((msg, result.list_status))
     return passed, blocked
-
-
-@router.get("/preview", response_model=list[EmailMetadata])
-async def preview_emails(user: User = Depends(get_current_user)):
-    """Metadata-only list (no bodies fetched) of the last 30 days."""
-    metadata = await asyncio.to_thread(fetch_recent_metadata, user.email)
-    return metadata
-
-
-@router.get("/preview-filtered", response_model=FilteredPreview)
-async def preview_filtered(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    metadata = await asyncio.to_thread(fetch_recent_metadata, user.email)
-    passed, blocked = await _classify(metadata, db)
-
-    bodies = await asyncio.to_thread(
-        fetch_message_bodies, user.email, [m["message_id"] for m, _ in passed]
-    )
-
-    allowed = []
-    unknown = []
-    for msg, status in passed:
-        redaction = redact_pii(bodies.get(msg["message_id"], ""))
-        entry = {**msg, "body": redaction.redacted_text, "pii_redacted": redaction.entities_found}
-        (allowed if status == "allowed" else unknown).append(entry)
-
-    return {"allowed": allowed, "blocked": blocked, "unknown": unknown}
-
-
-@router.get("/extract", response_model=ExtractionPreview)
-async def extract_emails(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Full pipeline: metadata → blocklist → (bodies for passers) → PII redaction
-    → injection wrapper → Claude extraction → structured events."""
-    metadata = await asyncio.to_thread(fetch_recent_metadata, user.email)
-    passed, blocked = await _classify(metadata, db)
-
-    bodies = await asyncio.to_thread(
-        fetch_message_bodies, user.email, [m["message_id"] for m, _ in passed]
-    )
-
-    allowed = []
-    unknown = []
-    total_events = 0
-    for msg, status in passed:
-        redaction = redact_pii(bodies.get(msg["message_id"], ""))
-        extraction = await asyncio.to_thread(
-            extract_events,
-            redaction.redacted_text,
-            msg["subject"],
-            msg["sender"],
-            msg["message_id"],
-            msg["date"],
-        )
-        entry = {
-            "message_id": msg["message_id"],
-            "sender": msg["sender"],
-            "subject": msg["subject"],
-            "date": msg["date"],
-            "events": [e.model_dump() for e in extraction.events],
-            "pii_redacted": redaction.entities_found,
-        }
-        total_events += len(extraction.events)
-        (allowed if status == "allowed" else unknown).append(entry)
-
-    return {
-        "allowed": allowed,
-        "blocked": blocked,
-        "unknown": unknown,
-        "total_events": total_events,
-    }
 
 
 async def _run_sync_job(

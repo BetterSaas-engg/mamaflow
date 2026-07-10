@@ -34,10 +34,12 @@ async def test_sync_requires_auth(client):
     assert (await client.get("/api/v1/sync/status")).status_code == 401
 
 
-async def test_preview_requires_auth(client):
-    assert (await client.get("/api/v1/sync/preview")).status_code == 401
-    assert (await client.get("/api/v1/sync/preview-filtered")).status_code == 401
-    assert (await client.get("/api/v1/sync/extract")).status_code == 401
+async def test_debug_preview_endpoints_are_removed(client):
+    """Phase-0 debug GETs (unused by the app) had no cooldown and returned
+    redacted body text — removed rather than hardened (2026-07-10 audit)."""
+    assert (await client.get("/api/v1/sync/preview")).status_code == 404
+    assert (await client.get("/api/v1/sync/preview-filtered")).status_code == 404
+    assert (await client.get("/api/v1/sync/extract")).status_code == 404
 
 
 async def test_status_is_idle_before_any_sync(client, db):
