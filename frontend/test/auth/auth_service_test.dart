@@ -42,7 +42,7 @@ void main() {
 
     final user = await auth.signInWithGoogle();
 
-    expect(user.id, 'u1');
+    expect(user!.id, 'u1');
     expect(user.email, 'parent@example.com');
     final captured = verify(() => api.postJson(captureAny(), captureAny())).captured;
     expect(captured[0], '/api/v1/auth/google/mobile');
@@ -50,12 +50,15 @@ void main() {
     verify(() => store.saveJwt('JWT123')).called(1);
   });
 
-  test('throws and never calls the backend when sign-in is cancelled', () async {
+  test('returns null and never calls the backend when sign-in is cancelled',
+      () async {
+    // Cancelling the consent sheet is a deliberate act, not a failure — the
+    // sign-in screen must not show an error for it.
     final api = _MockApi();
     final store = _MockTokenStore();
     final auth = AuthService(api, store, _FakeGoogle(null));
 
-    await expectLater(auth.signInWithGoogle(), throwsA(isA<AuthException>()));
+    expect(await auth.signInWithGoogle(), isNull);
     verifyNever(() => api.postJson(any(), any()));
   });
 

@@ -26,11 +26,11 @@ class AuthService {
   final TokenStore _tokenStore;
   final GoogleAuthCodes _google;
 
-  Future<AuthUser> signInWithGoogle() async {
+  /// Returns null when the user cancels the consent sheet — a deliberate act,
+  /// not an error; callers must not surface it as a failure.
+  Future<AuthUser?> signInWithGoogle() async {
     final result = await _google.obtainAuthorizationCode();
-    if (result == null) {
-      throw const AuthException('Google sign-in was cancelled');
-    }
+    if (result == null) return null;
 
     final resp = await _api.postJson(
       '/api/v1/auth/google/mobile',

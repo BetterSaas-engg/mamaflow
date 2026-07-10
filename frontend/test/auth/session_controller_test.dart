@@ -43,6 +43,17 @@ void main() {
     expect(container.read(sessionProvider).value, false);
   });
 
+  test('a cancelled sign-in leaves the session signed out', () async {
+    when(() => auth.isSignedIn()).thenAnswer((_) async => false);
+    when(() => auth.signInWithGoogle()).thenAnswer((_) async => null);
+    await container.read(sessionProvider.future);
+
+    final user = await container.read(sessionProvider.notifier).signIn();
+
+    expect(user, isNull);
+    expect(container.read(sessionProvider).value, false);
+  });
+
   test('handleUnauthorized resets push locally without a backend call',
       () async {
     await container.read(sessionProvider.future);

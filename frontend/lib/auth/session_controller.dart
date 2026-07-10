@@ -9,8 +9,11 @@ class SessionController extends AsyncNotifier<bool> {
   @override
   Future<bool> build() => ref.read(authServiceProvider).isSignedIn();
 
-  Future<AuthUser> signIn() async {
+  /// Null means the user cancelled the consent sheet — the session stays
+  /// signed out and the caller shows no error.
+  Future<AuthUser?> signIn() async {
     final user = await ref.read(authServiceProvider).signInWithGoogle();
+    if (user == null) return null;
     state = const AsyncData(true);
     return user;
   }
