@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    // Processes google-services.json for Firebase Cloud Messaging (D22/D27).
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -10,6 +12,9 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Required by flutter_local_notifications (uses java.time APIs) so the
+        // Android build works on all supported minSdk levels (D22/D27 push).
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -42,4 +47,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Backport of java.time etc. for core library desugaring (see compileOptions).
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

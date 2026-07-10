@@ -35,7 +35,10 @@ async def test_valid_code_returns_jwt_and_creates_user(client, db, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["token_type"] == "bearer"
-    assert body["expires_in"] == 15 * 60
+    # Against settings, not a literal — the TTL is env-configurable (D31) and a
+    # hardcoded value silently tracks whatever the runner's .env holds.
+    from api.config.settings import settings as app_settings
+    assert body["expires_in"] == app_settings.access_token_expire_minutes * 60
     assert body["user"]["email"] == "parent@example.com"
 
     claims = decode_access_token(body["access_token"])

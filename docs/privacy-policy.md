@@ -1,6 +1,6 @@
 # Mamaflow Privacy Policy (DRAFT — PM review required before publishing)
 
-_Last updated: 2026-07-03. Status: DRAFT for Google OAuth verification (E0). Replace
+_Last updated: 2026-07-10. Status: DRAFT for Google OAuth verification (E0). Replace
 bracketed placeholders and host at a public URL (e.g. https://mamaflow.app/privacy or the
 Railway domain) before submitting for verification._
 
@@ -70,6 +70,7 @@ described above (Anthropic as a data processor for extraction).
 | Anthropic (Claude API) | event extraction from redacted text (no training on data) |
 | Railway (hosting) + PostgreSQL | application hosting and storage of structured items |
 | Google Cloud Secret Manager | server-side storage of OAuth tokens |
+| Google Firebase Cloud Messaging (FCM/APNs) | delivery of reminder notifications; notification text contains the titles/times of your extracted items (e.g. an event name), transmitted only to your registered devices — never used for advertising |
 
 ## Contact
 

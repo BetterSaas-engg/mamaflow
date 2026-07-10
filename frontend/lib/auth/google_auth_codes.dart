@@ -2,7 +2,16 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+
+/// Matches FlutterWebAuth2.authenticate's shape; injectable so the flow is
+/// testable without a device (the plugin API is a static method).
+typedef WebAuthenticate = Future<String> Function({
+  required String url,
+  required String callbackUrlScheme,
+  required FlutterWebAuth2Options options,
+});
 
 /// Result of the OAuth authorization step: the code to exchange plus the PKCE
 /// verifier the backend needs to complete the exchange. (The redirect_uri is
@@ -30,9 +39,20 @@ abstract class GoogleAuthCodes {
 /// the iOS OAuth client. google_sign_in can't mint a Gmail-scoped serverAuthCode
 /// on iOS (see DECISIONS), so we run the flow directly.
 class WebAuthPkceCodes implements GoogleAuthCodes {
-  WebAuthPkceCodes({required String iosClientId}) : _clientId = iosClientId;
+  WebAuthPkceCodes({required String iosClientId, WebAuthenticate? authenticate})
+      : _clientId = iosClientId,
+        _authenticate = authenticate ?? _pluginAuthenticate;
 
   final String _clientId;
+  final WebAuthenticate _authenticate;
+
+  static Future<String> _pluginAuthenticate({
+    required String url,
+    required String callbackUrlScheme,
+    required FlutterWebAuth2Options options,
+  }) =>
+      FlutterWebAuth2.authenticate(
+          url: url, callbackUrlScheme: callbackUrlScheme, options: options);
 
   static const _scopes =
       'openid email https://www.googleapis.com/auth/gmail.readonly';
@@ -60,6 +80,9 @@ class WebAuthPkceCodes implements GoogleAuthCodes {
     final verifier = _randomVerifier();
     final challenge = _s256Challenge(verifier);
     final redirectUri = '$_redirectScheme:/oauth2redirect';
+    // PKCE already binds the code to this app instance; `state` adds the
+    // RFC 8252 §8.9 check that the callback belongs to THIS request.
+    final state = _randomVerifier();
 
     final url = Uri.https('accounts.google.com', '/o/oauth2/v2/auth', {
       'client_id': _clientId,
@@ -70,17 +93,29 @@ class WebAuthPkceCodes implements GoogleAuthCodes {
       'prompt': 'consent',
       'code_challenge': challenge,
       'code_challenge_method': 'S256',
+      'state': state,
     }).toString();
 
-    // Ephemeral: no shared cookies, so the user re-picks their account each time
-    // and we always get a fresh offline grant.
-    final result = await FlutterWebAuth2.authenticate(
-      url: url,
-      callbackUrlScheme: _redirectScheme,
-      options: const FlutterWebAuth2Options(preferEphemeral: true),
-    );
+    final String result;
+    try {
+      // Ephemeral: no shared cookies, so the user re-picks their account each
+      // time and we always get a fresh offline grant.
+      result = await _authenticate(
+        url: url,
+        callbackUrlScheme: _redirectScheme,
+        options: const FlutterWebAuth2Options(preferEphemeral: true),
+      );
+    } on PlatformException catch (e) {
+      // Dismissing the consent sheet is a deliberate cancel, not an error.
+      if (e.code == 'CANCELED') return null;
+      rethrow;
+    }
 
-    final code = Uri.parse(result).queryParameters['code'];
+    final params = Uri.parse(result).queryParameters;
+    if (params['state'] != state) {
+      throw StateError('OAuth callback state mismatch — dropping the code.');
+    }
+    final code = params['code'];
     if (code == null) return null;
     return OAuthCodeResult(code: code, codeVerifier: verifier);
   }

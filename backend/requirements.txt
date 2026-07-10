@@ -29,6 +29,11 @@ sqlalchemy[asyncio]>=2.0.35
 asyncpg>=0.30.0
 alembic>=1.14.0
 
+# Reminder engine
+# APScheduler 4.x is a breaking rewrite — keep the floor AND the major cap.
+apscheduler>=3.11.0,<4
+firebase-admin>=7.5.0
+
 # Tests
 pytest>=8.3.0
 pytest-asyncio>=0.24.0

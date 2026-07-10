@@ -67,6 +67,17 @@ void main() {
     expect(fired, 1);
   });
 
+  test('postVoid tolerates a 204 no-content response', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
+      ..httpClientAdapter = _NoContentAdapter();
+    final client = ApiClient(dio, jwtProvider: () async => 'jwt');
+
+    await expectLater(
+      client.postVoid('/api/v1/devices/unregister', {'fcm_token': 't'}),
+      completes,
+    );
+  });
+
   test('non-401 errors do not trigger onUnauthorized', () async {
     var fired = 0;
     final api = clientWithStatus(500, onUnauthorized: () async => fired++);
@@ -74,6 +85,20 @@ void main() {
     await expectLater(api.getJson('/api/v1/items'), throwsA(isA<DioException>()));
     expect(fired, 0);
   });
+}
+
+/// Fake transport returning an empty 204 — what /devices/unregister sends.
+class _NoContentAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async =>
+      ResponseBody.fromString('', 204);
+
+  @override
+  void close({bool force = false}) {}
 }
 
 /// Fake transport returning a fixed status code — no network involved.

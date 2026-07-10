@@ -1,55 +1,8 @@
+"""Sync API schemas. The Phase-0 preview/extract response schemas were removed
+with their debug GET endpoints (2026-07-10 audit) — extraction results now
+reach the client only as persisted items via GET /items."""
+
 from pydantic import BaseModel
-
-from api.schemas.family_event import FamilyEvent
-
-
-class EmailMetadata(BaseModel):
-    message_id: str
-    sender: str
-    subject: str
-    date: str
-    list_status: str = "unknown"
-
-
-class EmailPreview(BaseModel):
-    message_id: str
-    sender: str
-    subject: str
-    date: str
-    body: str
-    pii_redacted: int = 0
-
-
-class BlockedEmail(BaseModel):
-    message_id: str
-    sender: str
-    subject: str
-    date: str
-    reason: str
-    category: str | None
-    list_status: str
-
-
-class FilteredPreview(BaseModel):
-    allowed: list[EmailPreview]
-    blocked: list[BlockedEmail]
-    unknown: list[EmailPreview]
-
-
-class EmailExtraction(BaseModel):
-    message_id: str
-    sender: str
-    subject: str
-    date: str
-    events: list[FamilyEvent]
-    pii_redacted: int = 0
-
-
-class ExtractionPreview(BaseModel):
-    allowed: list[EmailExtraction]
-    blocked: list[BlockedEmail]
-    unknown: list[EmailExtraction]
-    total_events: int
 
 
 class SyncStartResponse(BaseModel):
@@ -61,5 +14,6 @@ class SyncStatusResponse(BaseModel):
     messages_scanned: int | None = None
     blocked: int | None = None
     processed: int | None = None
+    to_process: int | None = None
     items_created: int | None = None
     error: str | None = None

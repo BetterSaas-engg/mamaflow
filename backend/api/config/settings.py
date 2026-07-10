@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
     secret_key: str = "dev-secret-key"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 15
+    # Session length for the mobile app JWT (D31): 30 days. The client has no
+    # refresh flow — on 401 it signs the user out — so a short TTL means a
+    # forced re-login mid-use. Revisit (refresh tokens) in the E0 hardening.
+    access_token_expire_minutes: int = 30 * 24 * 60
     anthropic_api_key: str = ""
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
@@ -24,6 +27,11 @@ class Settings(BaseSettings):
     # Min seconds between completed syncs per user (each sync = a full 30-day
     # metadata scan; repeated triggers are a cost/DoS vector — A2 audit).
     sync_cooldown_seconds: int = 60
+    # Push reminders (Track B). Inert unless firebase_credentials_json is set
+    # (the FCM service-account JSON — a credential, env only, never the DB).
+    firebase_credentials_json: str = ""
+    reminder_tz: str = "America/Toronto"
+    reminder_hour: int = 18
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -3,6 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.models.base import _utcnow
 from api.models.device import Device
 from api.models.user import User
 
@@ -44,3 +45,25 @@ async def register_device(
     await db.commit()
     await db.refresh(device)
     return device
+
+
+async def unregister_device(db: AsyncSession, user: User, fcm_token: str) -> None:
+    """Soft-delete the caller's registration for this token (sign-out path).
+
+    Scoped to the authed user: if the token has since been re-registered to a
+    different account (shared-device switch), a stale instance's unregister is
+    a no-op. Idempotent — an unknown or already-deleted token is not an error.
+    """
+    device = (
+        await db.execute(
+            select(Device).where(
+                Device.fcm_token == fcm_token,
+                Device.user_id == user.id,
+                Device.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+    if device is not None:
+        device.deleted_at = _utcnow()
+        await db.commit()

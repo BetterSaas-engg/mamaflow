@@ -89,4 +89,22 @@ void main() {
     );
     verify(() => api.getJson(any())).called(5);
   });
+
+  test('run yields running statuses then done', () async {
+    final api = _MockApi();
+    when(() => api.postJson(any(), any())).thenAnswer((_) async => {'status': 'started'});
+    final statuses = [
+      {'status': 'running', 'processed': 1, 'to_process': 3, 'items_created': 0},
+      {'status': 'running', 'processed': 3, 'to_process': 3, 'items_created': 2},
+      {'status': 'done', 'items_created': 2, 'processed': 3, 'to_process': 3},
+    ];
+    when(() => api.getJson(any())).thenAnswer((_) async => statuses.removeAt(0));
+
+    final seen = await SyncService(api).run(pollInterval: Duration.zero).toList();
+
+    expect(seen.map((s) => s.status), ['running', 'running', 'done']);
+    expect(seen[0].processed, 1);
+    expect(seen[0].toProcess, 3);
+    expect(seen.last.itemsCreated, 2);
+  });
 }

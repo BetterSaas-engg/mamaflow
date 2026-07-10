@@ -13,4 +13,12 @@ class DeviceRegistrar {
       {'fcm_token': fcmToken, 'platform': platform},
     );
   }
+
+  /// Sign-out path: stop the backend addressing reminders to this device.
+  Future<void> unregister({required String fcmToken}) {
+    return _api.postVoid(
+      '/api/v1/devices/unregister',
+      {'fcm_token': fcmToken},
+    );
+  }
 }

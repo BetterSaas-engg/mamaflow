@@ -20,9 +20,7 @@ class ItemsService {
       query: query.isEmpty ? null : query,
     );
     final raw = (resp['items'] as List?) ?? const [];
-    return raw
-        .map((e) => Item.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList(growable: false);
+    return raw.map(Item.tryParse).whereType<Item>().toList(growable: false);
   }
 
   /// status: "done" | "dismissed".

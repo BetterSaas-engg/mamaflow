@@ -34,10 +34,12 @@ async def test_sync_requires_auth(client):
     assert (await client.get("/api/v1/sync/status")).status_code == 401
 
 
-async def test_preview_requires_auth(client):
-    assert (await client.get("/api/v1/sync/preview")).status_code == 401
-    assert (await client.get("/api/v1/sync/preview-filtered")).status_code == 401
-    assert (await client.get("/api/v1/sync/extract")).status_code == 401
+async def test_debug_preview_endpoints_are_removed(client):
+    """Phase-0 debug GETs (unused by the app) had no cooldown and returned
+    redacted body text — removed rather than hardened (2026-07-10 audit)."""
+    assert (await client.get("/api/v1/sync/preview")).status_code == 404
+    assert (await client.get("/api/v1/sync/preview-filtered")).status_code == 404
+    assert (await client.get("/api/v1/sync/extract")).status_code == 404
 
 
 async def test_status_is_idle_before_any_sync(client, db):
@@ -146,6 +148,61 @@ async def test_sync_cooldown_returns_429(client, db, monkeypatch):
     assert first.status_code == 202
     assert second.status_code == 429
     assert "Retry-After" in second.headers
+
+
+async def test_sync_status_reports_to_process_during_run(client, db, monkeypatch):
+    from api.services import sync_state
+    from api.services.users import get_or_create_user
+    # _user_with_token creates the user "parent@example.com"; re-fetch it so we
+    # can seed a running state under the same id the JWT names.
+    user = await get_or_create_user(db, "parent@example.com")
+    _, token = await _user_with_token(db)
+    sync_state.progress(user.id, messages_scanned=30, to_process=28, processed=12, items_created=3)
+
+    resp = await client.get("/api/v1/sync/status", headers=_auth(token))
+
+    body = resp.json()
+    assert body["status"] == "running"
+    assert body["to_process"] == 28
+    assert body["processed"] == 12
+    assert body["items_created"] == 3
+
+
+async def test_run_sync_job_updates_processed_incrementally(db, session_factory, monkeypatch):
+    # session_factory is the conftest fixture bound to the TEST SQLite engine
+    # (a StaticPool shared with `db`), so the job sees the committed test user.
+    # Do NOT use the production get_session_factory() — it binds to Railway.
+    from api.services import sync_state
+    from api.routers import sync as sync_router
+    from api.services.users import get_or_create_user
+    from api.schemas.family_event import FamilyItem, ExtractionResponse
+
+    user = await get_or_create_user(db, "inc@example.com")
+    meta = [
+        {"message_id": "a", "sender": "s@school.edu", "subject": "x", "date": ""},
+        {"message_id": "b", "sender": "s@school.edu", "subject": "y", "date": ""},
+    ]
+    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: meta)
+    monkeypatch.setattr(sync_router, "fetch_message_bodies", lambda email, ids: {i: "body" for i in ids})
+    # s@school.edu is not on the default blocklist, so both messages pass classify.
+
+    # Record processed at each extract call to prove it increments mid-run.
+    seen = []
+
+    def fake_extract(*args, **kwargs):
+        seen.append(sync_state.get_state(user.id).processed)
+        return ExtractionResponse(events=[FamilyItem(item_type="action", action_required="do")])
+
+    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
+
+    sync_state.try_start(user.id)
+    await sync_router._run_sync_job(user.id, user.email, session_factory)
+
+    # processed was 0 before the first item, 1 before the second.
+    assert seen == [0, 1]
+    final = sync_state.get_state(user.id)
+    assert final.status == "done"
+    assert final.to_process == 2
 
 
 async def test_failed_sync_reports_failed_status(client, db, monkeypatch):

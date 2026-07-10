@@ -8,11 +8,14 @@ from api.routers.account import router as account_router
 from api.routers.devices import router as devices_router
 from api.routers.items import router as items_router
 from api.routers.sync import router as sync_router
+from api.services.reminder_scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    start_scheduler()
     yield
+    stop_scheduler()
     await engine.dispose()
 
 

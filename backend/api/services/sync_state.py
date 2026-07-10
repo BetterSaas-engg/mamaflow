@@ -12,6 +12,7 @@ class SyncState:
     status: str = "idle"  # idle | running | done | failed
     messages_scanned: int | None = None
     blocked: int | None = None
+    to_process: int | None = None
     processed: int | None = None
     items_created: int | None = None
     error: str | None = None
@@ -47,6 +48,24 @@ def try_start(user_id: uuid.UUID, cooldown_seconds: float = 0) -> tuple[str, flo
     return "started", 0
 
 
+def progress(
+    user_id: uuid.UUID,
+    *,
+    messages_scanned: int,
+    to_process: int,
+    processed: int,
+    items_created: int,
+) -> None:
+    """Update the running state with live counts (status stays 'running')."""
+    _states[user_id] = SyncState(
+        status="running",
+        messages_scanned=messages_scanned,
+        to_process=to_process,
+        processed=processed,
+        items_created=items_created,
+    )
+
+
 def finish(
     user_id: uuid.UUID,
     messages_scanned: int,
@@ -58,6 +77,7 @@ def finish(
         status="done",
         messages_scanned=messages_scanned,
         blocked=blocked,
+        to_process=processed,
         processed=processed,
         items_created=items_created,
         finished_monotonic=time.monotonic(),
