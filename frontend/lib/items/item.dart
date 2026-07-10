@@ -36,6 +36,18 @@ class Item {
   String get title =>
       eventTitle ?? actionRequired ?? (isEvent ? '(untitled event)' : '(untitled action)');
 
+  /// Defensive variant for list parsing: one malformed row (partial write,
+  /// migration hiccup) returns null instead of taking down the whole list —
+  /// callers skip nulls.
+  static Item? tryParse(Object? json) {
+    if (json is! Map) return null;
+    try {
+      return Item.fromJson(Map<String, dynamic>.from(json));
+    } catch (_) {
+      return null;
+    }
+  }
+
   factory Item.fromJson(Map<String, dynamic> json) => Item(
         id: json['id'] as String,
         itemType: json['item_type'] as String,

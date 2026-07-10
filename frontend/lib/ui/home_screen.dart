@@ -197,14 +197,26 @@ class _ItemTile extends ConsumerWidget {
       trailing: closed
           ? Chip(label: Text(item.status))
           : PopupMenuButton<String>(
-              onSelected: (status) =>
-                  ref.read(itemsProvider.notifier).setStatus(item.id, status),
+              onSelected: (status) => _setStatus(context, ref, status),
               itemBuilder: (context) => const [
                 PopupMenuItem(value: 'done', child: Text('Mark done')),
                 PopupMenuItem(value: 'dismissed', child: Text('Dismiss')),
               ],
             ),
     );
+  }
+
+  Future<void> _setStatus(
+      BuildContext context, WidgetRef ref, String status) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(itemsProvider.notifier).setStatus(item.id, status);
+    } catch (_) {
+      // Offline/failed PATCH: the item is still open — say so instead of
+      // silently dropping the tap.
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Could not update the item.')));
+    }
   }
 }
 

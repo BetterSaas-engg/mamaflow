@@ -79,17 +79,11 @@ class ItemDetailScreen extends ConsumerWidget {
             OverflowBar(
               children: [
                 TextButton(
-                  onPressed: () {
-                    ref.read(itemsProvider.notifier).setStatus(item.id, 'done');
-                    Navigator.of(context).pop();
-                  },
+                  onPressed: () => _setStatus(context, ref, 'done'),
                   child: const Text('Mark done'),
                 ),
                 TextButton(
-                  onPressed: () {
-                    ref.read(itemsProvider.notifier).setStatus(item.id, 'dismissed');
-                    Navigator.of(context).pop();
-                  },
+                  onPressed: () => _setStatus(context, ref, 'dismissed'),
                   child: const Text('Dismiss'),
                 ),
               ],
@@ -98,5 +92,21 @@ class ItemDetailScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _setStatus(
+      BuildContext context, WidgetRef ref, String status) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      await ref.read(itemsProvider.notifier).setStatus(item.id, status);
+    } catch (_) {
+      // Failed PATCH: stay on the screen — popping would silently discard
+      // the user's action.
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Could not update the item.')));
+      return;
+    }
+    if (navigator.mounted) navigator.pop();
   }
 }

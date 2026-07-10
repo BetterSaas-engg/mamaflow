@@ -65,6 +65,23 @@ void main() {
     expect(captured[1], {'status': 'done'});
   });
 
+  test('list() skips malformed rows instead of failing the whole list', () async {
+    final api = _MockApi();
+    when(() => api.getJson(any(), query: any(named: 'query'))).thenAnswer((_) async => {
+          'items': [
+            {'id': 'good', 'item_type': 'event', 'status': 'open'},
+            {'id': 'bad-no-status', 'item_type': 'event'},
+            {'id': null, 'item_type': 'event', 'status': 'open'},
+            'not-a-map',
+          ]
+        });
+    final svc = ItemsService(api);
+
+    final items = await svc.list();
+
+    expect(items.map((i) => i.id).toList(), ['good']);
+  });
+
   test('list passes status as a query param', () async {
     final api = _MockApi();
     when(() => api.getJson(any(), query: any(named: 'query')))

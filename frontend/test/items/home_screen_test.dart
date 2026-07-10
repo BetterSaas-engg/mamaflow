@@ -47,4 +47,23 @@ void main() {
 
     expect(find.textContaining('No items'), findsOneWidget);
   });
+
+  testWidgets('a failed status update surfaces an error instead of silence',
+      (tester) async {
+    final svc = _MockService();
+    when(() => svc.list(status: any(named: 'status')))
+        .thenAnswer((_) async => [_item('Soccer')]);
+    when(() => svc.updateStatus(any(), any()))
+        .thenThrow(Exception('offline'));
+
+    await tester.pumpWidget(_host(svc));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mark done'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Could not update the item.'), findsOneWidget);
+  });
 }
