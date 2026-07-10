@@ -117,11 +117,19 @@
 >   states (DoS-only, legacy flow — rate-limit or TTL-evict before real web traffic);
 >   `docs/backend-requirements-from-frontend.md` + the 2026-06-22 Flutter spec still mention the
 >   removed GET endpoints (doc hygiene).
-> - Remaining should-fix batch (not yet done): Dio timeouts; defensive item parsing (skip bad rows);
->   surface failed status mutations; pop stale routes on session flip; base-URL release guard/https;
->   OAuth `state` param + cancel handling in the app; bidirectional ad-isolation test; pin
->   `apscheduler`/`firebase-admin`; `.env.example` drift (`SYNC_COOLDOWN_SECONDS`, dead Stripe vars);
->   `get_or_create_user` IntegrityError guard.
+> - **Should-fix batch DONE same day (5 more commits, security-audited PASS, no BLOCKs).** Backend
+>   **134** tests, frontend **82**, analyze clean: Dio timeouts (`buildDio`) + fail-loud
+>   https-only `API_BASE_URL` in release (`resolveBaseUrl`); `Item.tryParse` skips malformed rows;
+>   status mutations awaited + snackbar on failure (detail pops only on success); session flip →
+>   pop pushed routes to root (`rootNavigatorKey`); OAuth `state` param (RFC 8252, fail-closed) +
+>   consent-sheet cancel returns null quietly (`signInWithGoogle`/`signIn` now nullable);
+>   ad-isolation test now bidirectional (SDK only under `lib/ads/`, `lib/ads/` app/content-free,
+>   case-insensitive); `apscheduler>=3.11,<4` + `firebase-admin>=7.5.0` pinned; `.env.example`
+>   documents `SYNC_COOLDOWN_SECONDS`, dead Stripe placeholders dropped (return with Track E);
+>   `get_or_create_user` recovers from the concurrent first-sign-in IntegrityError.
+> - Accepted low-priority follow-ups (audit WARNs, deliberately not done): a drop-counter/log for
+>   `Item.tryParse` (the app is deliberately log-free); narrowing the IntegrityError catch if more
+>   unique constraints are ever added to `users`; rate-limit/TTL-evict `GET /google` state (above).
 
 | Track | What | Gate / status |
 |-------|------|---------------|

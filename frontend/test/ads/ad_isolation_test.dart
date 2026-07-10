@@ -42,7 +42,10 @@ void main() {
           reason: '${f.path} imports app code');
       expect(src.contains("import '../"), false,
           reason: '${f.path} imports app code via a relative path');
-      expect(RegExp(r'\b(event|child|extraction|email|item)\b').hasMatch(src),
+      expect(
+          RegExp(r'\b(event|child|extraction|email|item)s?\b',
+                  caseSensitive: false)
+              .hasMatch(src),
           false,
           reason: '${f.path} references content-shaped identifiers');
     }
