@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
     secret_key: str = "dev-secret-key"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 15
+    # Session length for the mobile app JWT (D31): 30 days. The client has no
+    # refresh flow — on 401 it signs the user out — so a short TTL means a
+    # forced re-login mid-use. Revisit (refresh tokens) in the E0 hardening.
+    access_token_expire_minutes: int = 30 * 24 * 60
     anthropic_api_key: str = ""
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"

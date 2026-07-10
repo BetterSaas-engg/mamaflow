@@ -19,3 +19,10 @@ def test_development_allows_weak_secret():
 def test_strong_secret_accepted_in_production():
     s = Settings(environment="production", secret_key="x" * 48, _env_file=None)
     assert s.environment == "production"
+
+
+def test_default_session_ttl_is_30_days():
+    """D31: mobile session JWTs last 30 days — the app has no refresh flow, and
+    a 15-minute TTL forced a re-sign-in mid-use every quarter hour."""
+    s = Settings(_env_file=None)
+    assert s.access_token_expire_minutes == 30 * 24 * 60
