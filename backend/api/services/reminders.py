@@ -1,6 +1,8 @@
 """Selecting + formatting the evening-before reminder digest. Pure DB reads +
 string formatting — no push/network here (see push_sender)."""
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +11,25 @@ from api.models.item import Item
 from api.models.user import User
 
 _MAX_LISTED = 5
+
+# event_time is a free-form extracted string, so the accepted shapes are listed
+# explicitly; anything else sorts with the untimed events.
+_TIME_FORMATS = ("%I:%M %p", "%I:%M%p", "%I %p", "%I%p", "%H:%M")
+
+
+def _time_key(event_time: str | None) -> tuple[int, int]:
+    """Chronological sort key: parsed times by minute-of-day; missing or
+    unparseable times last (a lexicographic sort puts '10:00 AM' before
+    '9:00 AM')."""
+    if event_time:
+        text = event_time.strip().upper()
+        for fmt in _TIME_FORMATS:
+            try:
+                parsed = datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+            return (0, parsed.hour * 60 + parsed.minute)
+    return (1, 0)
 
 
 async def users_with_devices(db: AsyncSession) -> list[User]:
@@ -40,9 +61,9 @@ async def tomorrow_events(db: AsyncSession, user: User, target_date: str) -> lis
             Item.item_type == "event",
             Item.event_date == target_date,
         )
-        .order_by(Item.event_time)
+        .order_by(Item.created_at)  # stable tiebreak; wall-clock sort below
     )
-    return list(rows.scalars().all())
+    return sorted(rows.scalars().all(), key=lambda item: _time_key(item.event_time))
 
 
 def format_digest(items) -> tuple[str, str]:

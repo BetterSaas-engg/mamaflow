@@ -22,6 +22,35 @@ async def test_tomorrow_events_selects_only_open_dated_events(db):
     assert [e.event_title for e in events] == ["Soccer"]
 
 
+async def test_tomorrow_events_sorted_chronologically_not_lexicographically(db):
+    """event_time is a free-form string; a lexicographic sort puts '10:00 AM'
+    before '9:00 AM'. The digest must list events in wall-clock order, with
+    untimed events last."""
+    user = await get_or_create_user(db, "t@x.com")
+    await persist_items(db, user, "mt", [
+        FamilyItem(item_type="event", event_title="Untimed", date="2026-07-07"),
+        FamilyItem(item_type="event", event_title="Recital", date="2026-07-07", time="2:30 PM"),
+        FamilyItem(item_type="event", event_title="Dentist", date="2026-07-07", time="10:00 AM"),
+        FamilyItem(item_type="event", event_title="Drop-off", date="2026-07-07", time="9:00 AM"),
+        FamilyItem(item_type="event", event_title="Dinner", date="2026-07-07", time="18:30"),
+    ])
+    await db.commit()
+
+    events = await reminders.tomorrow_events(db, user, "2026-07-07")
+
+    assert [e.event_title for e in events] == [
+        "Drop-off", "Dentist", "Recital", "Dinner", "Untimed",
+    ]
+
+
+def test_time_sort_key_handles_free_form_values():
+    key = reminders._time_key
+    assert key("9:00 AM") < key("10:00 AM") < key("2:30 PM")
+    assert key("2:30 PM") < key("18:30")  # 24h format parsed too
+    assert key("9AM") < key("noon-ish")   # unparseable sorts last...
+    assert key("noon-ish") == key(None)   # ...alongside missing times
+
+
 async def test_tomorrow_events_excludes_done_and_other_users(db):
     a = await get_or_create_user(db, "a@x.com")
     b = await get_or_create_user(db, "b@x.com")
