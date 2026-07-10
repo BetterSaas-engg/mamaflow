@@ -8,6 +8,10 @@ class DeviceRegisterRequest(BaseModel):
     platform: Literal["ios", "android"]
 
 
+class DeviceUnregisterRequest(BaseModel):
+    fcm_token: str
+
+
 class DeviceRead(BaseModel):
     id: str
     platform: str

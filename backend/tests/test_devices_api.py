@@ -69,3 +69,67 @@ async def test_register_rejects_invalid_platform(client, db):
         headers=_auth(token),
     )
     assert resp.status_code == 422
+
+
+async def test_unregister_requires_auth(client):
+    resp = await client.post("/api/v1/devices/unregister", json={"fcm_token": "t"})
+    assert resp.status_code == 401
+
+
+async def test_unregister_soft_deletes_own_device(client, db):
+    _, token = await _user_with_token(db)
+    await client.post(
+        "/api/v1/devices/register",
+        json={"fcm_token": "tok1", "platform": "ios"},
+        headers=_auth(token),
+    )
+
+    resp = await client.post(
+        "/api/v1/devices/unregister",
+        json={"fcm_token": "tok1"},
+        headers=_auth(token),
+    )
+
+    assert resp.status_code == 204
+    dev = (
+        await db.execute(select(Device).where(Device.fcm_token == "tok1"))
+    ).scalar_one()
+    assert dev.deleted_at is not None
+
+
+async def test_unregister_unknown_token_is_idempotent(client, db):
+    _, token = await _user_with_token(db)
+
+    resp = await client.post(
+        "/api/v1/devices/unregister",
+        json={"fcm_token": "never-registered"},
+        headers=_auth(token),
+    )
+
+    assert resp.status_code == 204
+
+
+async def test_unregister_leaves_other_users_device_alone(client, db):
+    """A stale app instance (old JWT) must not soft-delete a token that has
+    since been re-registered to a different account (shared-device switch)."""
+    _, token_a = await _user_with_token(db, email="a@example.com")
+    _, token_b = await _user_with_token(db, email="b@example.com")
+
+    # B currently owns the token (last registration wins).
+    await client.post(
+        "/api/v1/devices/register",
+        json={"fcm_token": "tok1", "platform": "ios"},
+        headers=_auth(token_b),
+    )
+
+    resp = await client.post(
+        "/api/v1/devices/unregister",
+        json={"fcm_token": "tok1"},
+        headers=_auth(token_a),
+    )
+
+    assert resp.status_code == 204
+    dev = (
+        await db.execute(select(Device).where(Device.fcm_token == "tok1"))
+    ).scalar_one()
+    assert dev.deleted_at is None
