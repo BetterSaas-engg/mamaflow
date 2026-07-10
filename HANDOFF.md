@@ -75,7 +75,53 @@
 > - Branch `feat/backend-mobile-integration` pushed; **PR #1 open**
 >   (https://github.com/BetterSaas-engg/mamaflow/pull/1) — merge pending PM review.
 
-## Roadmap (agreed 2026-07-03)
+> **Update 2026-07-10 — Full code audit (firewall + backend + frontend), read-only.** Three parallel
+> audits (security-auditor, code-reviewer, frontend) against the whole repo. **Firewall/privacy: PASS,
+> no BLOCKs** — all five flows clean (content→ads, raw-body persistence, tokens, metadata-first fetch
+> ordering, injection wrap); firewall-guard exit 0; backend **111 tests pass**, no live-API calls in
+> tests. **2 must-fix before Track B push activation:**
+> 1. Stale FCM registration on account switch/sign-out (`push_service.dart` `_started` guard on an
+>    app-lifetime singleton + no unregister endpoint) — user A's content-bearing digests can reach
+>    user B's lock screen on a shared device.
+> 2. 15-min JWT with no client refresh flow — any session >15 min gets dumped to sign-in mid-action
+>    (401 → auto sign-out). Decide: refresh flow vs longer TTL.
+>
+> Top should-fixes: reminder digest sorts free-form `event_time` strings lexicographically
+> (`reminders.py:43`, "9:00 AM" after "2:30 PM"); unhandled base64 decode in `gmail_reader.py:42`
+> fails a whole sync on one malformed message; legacy GET `/preview`/`/preview-filtered`/`/extract`
+> have no cooldown + return redacted body text (unused by the app — remove or gate); legacy web OAuth
+> callback (`oauth.py`) has KeyError→500 paths + blocking sync I/O on the loop; ad-isolation test is
+> one-directional (nothing stops a feature file importing `google_mobile_ads` directly); no Dio
+> timeouts; one malformed item row breaks the whole items list (hard `as` casts); privacy policy
+> missing Firebase/FCM sub-processor row; `apscheduler`/`firebase-admin` unpinned in requirements.
+> Full findings in the audit report (PM conversation 2026-07-10).
+>
+> **Fix batch landed same day (7 commits, security-audited PASS, no BLOCKs).** Backend **133** tests,
+> frontend **66**, `flutter analyze` clean:
+> 1. **M1 FIXED** — `POST /api/v1/devices/unregister` (soft-delete, user-scoped, idempotent, no
+>    enumeration oracle); frontend `PushService.stop()` unregisters + cancels the token-refresh
+>    listener + resets the start guard; `SessionController.signOut()` stops push BEFORE clearing the
+>    JWT; the 401 handler resets locally only (no network → no 401 loop).
+> 2. **M2 FIXED (D31)** — session JWT TTL default now **30 days** (43200). ⚠️ **USER: update
+>    `ACCESS_TOKEN_EXPIRE_MINUTES=43200` on Railway AND in your local `backend/.env`** (the old 15 is
+>    still in both; `.env` overrides the new default).
+> 3. Privacy policy: Firebase/FCM sub-processor row added (content-derived digest text disclosed).
+> 4. Reminder digest sorts by parsed wall-clock time (`_time_key`), untimed last.
+> 5. `gmail_reader` hardened: malformed base64/MIME/headers degrade to "" per message (new
+>    `test_gmail_reader.py`) — one bad email can no longer fail a sync batch.
+> 6. Debug `GET /sync/preview|preview-filtered|/extract` **REMOVED** (+ their schemas). Hygiene-queue
+>    item resolved the other way: the legacy web OAuth callback was **hardened, kept for dev**
+>    (deny/missing/unknown state → 400, token exchange + cert fetch off-loop, pending-state dict
+>    bounded, types-only logging in the mobile exchange).
+> - Audit WARNs tracked, not fixed: unauthenticated `GET /google` can FIFO-evict in-flight web-OAuth
+>   states (DoS-only, legacy flow — rate-limit or TTL-evict before real web traffic);
+>   `docs/backend-requirements-from-frontend.md` + the 2026-06-22 Flutter spec still mention the
+>   removed GET endpoints (doc hygiene).
+> - Remaining should-fix batch (not yet done): Dio timeouts; defensive item parsing (skip bad rows);
+>   surface failed status mutations; pop stale routes on session flip; base-URL release guard/https;
+>   OAuth `state` param + cancel handling in the app; bidirectional ad-isolation test; pin
+>   `apscheduler`/`firebase-admin`; `.env.example` drift (`SYNC_COOLDOWN_SECONDS`, dead Stripe vars);
+>   `get_or_create_user` IntegrityError guard.
 
 | Track | What | Gate / status |
 |-------|------|---------------|
@@ -132,11 +178,15 @@ Gmail OAuth → fetch_recent_emails (last 30 days, max 50)
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Health check |
-| GET | `/api/v1/auth/google` | Start Gmail OAuth flow |
-| GET | `/api/v1/auth/google/callback` | OAuth callback |
-| GET | `/api/v1/sync/preview?email=` | Raw email list (no filtering) |
-| GET | `/api/v1/sync/preview-filtered?email=` | Emails sorted into allowed/blocked/unknown with PII redaction |
-| GET | `/api/v1/sync/extract?email=` | Full pipeline — returns structured events + actions per email |
+| GET | `/api/v1/auth/google` (+ `/callback`) | Legacy web OAuth (dev-only; hardened 2026-07-10) |
+| POST | `/api/v1/auth/google/mobile` | Mobile PKCE code exchange → app JWT (D28) |
+| POST | `/api/v1/sync` (+ GET `/sync/status`) | Background sync (202 + poll); cooldown-limited |
+| GET | `/api/v1/items` / PATCH `/api/v1/items/{id}` | List / update persisted items |
+| POST | `/api/v1/devices/register` / `/unregister` | FCM device registration lifecycle |
+| DELETE | `/api/v1/account` | Soft-delete account + revoke Gmail token |
+
+_(The Phase-0 debug GETs `/sync/preview`, `/sync/preview-filtered`, `/sync/extract` were removed
+2026-07-10 — no cooldown, returned redacted body text, unused by the app.)_
 
 ---
 
