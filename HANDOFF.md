@@ -131,6 +131,26 @@
 >   `Item.tryParse` (the app is deliberately log-free); narrowing the IntegrityError catch if more
 >   unique constraints are ever added to `users`; rate-limit/TTL-evict `GET /google` state (above).
 
+> **Update 2026-07-14 — Android OAuth + FCM registration E2E VERIFIED on emulator against prod.**
+> Full round-trip on the Pixel emulator against `https://mamaflow-production.up.railway.app`:
+> Continue with Google → browser PKCE flow (account chooser → tester interstitial → consent incl.
+> the Gmail-scope checkbox) → redirect into the app (`CallbackActivity`) → backend code exchange →
+> signed-in Agenda → notification permission granted (`POST_NOTIFICATIONS granted=true`) →
+> `PushService` token registration ran (no failure logged). Two days of "Sign-in failed" were
+> **environment, not code**: (1) the emulator's default DNS could not resolve `*.up.railway.app`
+> (Google domains resolved fine) → every token-exchange POST died as `DioException [unknown]` —
+> fixed by launching the emulator with `-dns-server 8.8.8.8,1.1.1.1`; (2) Chrome rendered blank
+> pages under the emulator's hardware GPU → `-gpu swiftshader_indirect`. **Emulator testing needs
+> both flags:** `emulator -avd <name> -gpu swiftshader_indirect -dns-server 8.8.8.8,1.1.1.1`.
+> Also required en route: `sabiranthapa5@gmail.com` added to the OAuth **Test users** list (a
+> non-tester gets a hard "Access blocked: 403 access_denied" with no Advanced link), and stale
+> half-added device Google accounts removed ("This account already exists on your device" blocks
+> Google's embedded add-account flow — sign in via the app's own tab instead). Debug-only
+> diagnostic added: `sign_in_screen` now `debugPrint`s the sign-in exception type (was a blind
+> `catch (_)` — cost hours). **Still to verify (USER, prod-DB read):** the `devices` row for the
+> new registration, then the live digest test (`REMINDER_HOUR` nudge + an open event dated
+> tomorrow).
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
