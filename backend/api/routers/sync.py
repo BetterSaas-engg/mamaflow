@@ -129,6 +129,12 @@ async def _run_sync_job(
                     # A failed flush/commit leaves the session needing a
                     # rollback; without it every later message would fail too.
                     await db.rollback()
+                    # rollback() expires loaded instances — re-fetch the user
+                    # so later iterations don't lazy-refresh in async context
+                    # (MissingGreenlet, the reminder-engine Critical's twin).
+                    user = await db.get(User, user_id)
+                    if user is None:
+                        break
                 sync_state.progress(
                     user_id,
                     messages_scanned=len(metadata),
