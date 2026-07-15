@@ -26,9 +26,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on
-    # restart) or "secret-manager" (GCP, requires gcp_project_id + ADC creds).
+    # restart) or "secret-manager" (GCP, requires gcp_project_id + credentials).
     token_store_backend: str = "memory"
     gcp_project_id: str = ""
+    # Service-account JSON for Secret Manager, whole JSON in the env var
+    # (Railway has no filesystem for an ADC file). A credential: env only,
+    # never the DB or source (D4). Empty -> standard ADC file path.
+    google_application_credentials_json: str = ""
     # Min seconds between completed syncs per user (each sync = a full 30-day
     # metadata scan; repeated triggers are a cost/DoS vector — A2 audit).
     sync_cooldown_seconds: int = 60

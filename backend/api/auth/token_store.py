@@ -4,7 +4,10 @@ Two backends behind one interface, selected by settings.token_store_backend:
   - "memory"          — process-local dict; dev/tests default (Phase 0 behavior).
                         Tokens are lost on restart (users re-sign-in).
   - "secret-manager"  — GCP Secret Manager; one secret per user, new version per
-                        update. Auth via standard ADC (GOOGLE_APPLICATION_CREDENTIALS).
+                        update. Auth: GOOGLE_APPLICATION_CREDENTIALS_JSON (the
+                        service-account JSON in an env var — Railway has no
+                        filesystem for an ADC file), falling back to standard
+                        ADC (GOOGLE_APPLICATION_CREDENTIALS) when unset.
 
 The module-level store_token/get_token/list_users functions remain the stable
 interface for callers (oauth endpoint, gmail_reader).
@@ -41,6 +44,18 @@ class InMemoryTokenStore:
         self._tokens.pop(user_email.strip().lower(), None)
 
 
+def _credentials_from_env():
+    """Service-account credentials from GOOGLE_APPLICATION_CREDENTIALS_JSON —
+    the whole JSON in an env var (a credential: env only, never the DB, D4).
+    Returns None when unset, letting the client fall back to standard ADC."""
+    raw = settings.google_application_credentials_json
+    if not raw:
+        return None
+    from google.oauth2 import service_account
+
+    return service_account.Credentials.from_service_account_info(json.loads(raw))
+
+
 class SecretManagerTokenStore:
     """One GCP secret per user: gmail-token-<sha256(email)>.
 
@@ -53,7 +68,14 @@ class SecretManagerTokenStore:
         if client is None:
             from google.cloud import secretmanager
 
-            client = secretmanager.SecretManagerServiceClient()
+            try:
+                client = secretmanager.SecretManagerServiceClient(
+                    credentials=_credentials_from_env()
+                )
+            except Exception as exc:
+                # Sanitized boundary (class contract): the raw env JSON must
+                # never ride an exception message toward a client.
+                raise TokenStoreError("token store credentials invalid") from exc
         self._client = client
         self._project = project_id
         self._cache: dict[str, dict] = {}
