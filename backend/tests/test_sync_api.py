@@ -220,3 +220,41 @@ async def test_failed_sync_reports_failed_status(client, db, monkeypatch):
     assert status["status"] == "failed"
     # Sanitized: no internal exception text leaks to the client.
     assert "exploded" not in (status.get("error") or "")
+
+
+async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeypatch):
+    """A per-message extraction error (e.g. a transient Claude API failure —
+    or 2026-07-15's invalid tool schema, which 400'd EVERY message and killed
+    every sync) must skip that message and keep processing the rest. The
+    failed message stays unsynced (no items row), so a later sync retries it.
+    """
+    _, token = await _user_with_token(db)
+
+    metadata = [
+        {"message_id": "m_bad", "sender": "a@ok.org", "subject": "Bad", "date": "Mon"},
+        {"message_id": "m_good", "sender": "b@ok.org", "subject": "Good", "date": "Tue"},
+    ]
+    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(
+        sync_router, "fetch_message_bodies",
+        lambda email, ids: {mid: "body" for mid in ids},
+    )
+
+    def fake_extract(body, subject, sender, message_id="", email_date=""):
+        if message_id == "m_bad":
+            raise RuntimeError("claude 400")
+        return ExtractionResponse(
+            events=[FamilyItem(item_type="event", event_title="Kept", date="2026-07-16")]
+        )
+
+    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
+
+    resp = await client.post("/api/v1/sync", headers=_auth(token))
+    assert resp.status_code == 202
+
+    status = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+    assert status["status"] == "done"
+    assert status["items_created"] == 1
+
+    listed = (await client.get("/api/v1/items", headers=_auth(token))).json()["items"]
+    assert [i["event_title"] for i in listed] == ["Kept"]

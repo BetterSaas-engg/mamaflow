@@ -101,17 +101,34 @@ async def _run_sync_job(
 
             items_created = 0
             for _i, (msg, _status) in enumerate(new_passed):
-                redaction = redact_pii(bodies.get(msg["message_id"], ""))
-                extraction = await asyncio.to_thread(
-                    extract_events,
-                    redaction.redacted_text,
-                    msg["subject"],
-                    msg["sender"],
-                    msg["message_id"],
-                    msg["date"],
-                )
-                saved = await persist_items(db, user, msg["message_id"], extraction.events)
-                items_created += len(saved)
+                # Per-message isolation: a redaction/extraction failure (e.g.
+                # a transient Claude API error) skips THIS message and keeps
+                # the sync alive. No items row is written for it, so the
+                # incremental skip won't hide it — the next sync retries it.
+                # (2026-07-15: an invalid tool schema 400'd every extraction
+                # and each sync died on its first message.)
+                try:
+                    redaction = redact_pii(bodies.get(msg["message_id"], ""))
+                    extraction = await asyncio.to_thread(
+                        extract_events,
+                        redaction.redacted_text,
+                        msg["subject"],
+                        msg["sender"],
+                        msg["message_id"],
+                        msg["date"],
+                    )
+                    saved = await persist_items(db, user, msg["message_id"], extraction.events)
+                    items_created += len(saved)
+                except Exception as exc:
+                    # Types only — never message content (audit log rule).
+                    _log.warning(
+                        "sync: skipping one message for user %s (%s)",
+                        user_id,
+                        type(exc).__name__,
+                    )
+                    # A failed flush/commit leaves the session needing a
+                    # rollback; without it every later message would fail too.
+                    await db.rollback()
                 sync_state.progress(
                     user_id,
                     messages_scanned=len(metadata),

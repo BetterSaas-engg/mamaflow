@@ -41,11 +41,20 @@ _EXTRACTION_JSON_SCHEMA = {
                     "time": {"type": ["string", "null"]},
                     "location": {"type": ["string", "null"]},
                     "child_name": {"type": ["string", "null"]},
+                    # Strict-mode quirk: the API rejects `enum` combined with a
+                    # union type ("Enum value 'school' does not match declared
+                    # type ['string','null']") — every extraction 400'd until
+                    # 2026-07-15. anyOf keeps the vocabulary AND nullability.
                     "event_type": {
-                        "type": ["string", "null"],
-                        "enum": [
-                            "school", "medical", "sports", "playdate",
-                            "camp", "birthday", "recital", "other", None,
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "enum": [
+                                    "school", "medical", "sports", "playdate",
+                                    "camp", "birthday", "recital", "other",
+                                ],
+                            },
+                            {"type": "null"},
                         ],
                     },
                     "source_sender": {"type": ["string", "null"]},
