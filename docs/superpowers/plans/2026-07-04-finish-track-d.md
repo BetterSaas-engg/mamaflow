@@ -286,10 +286,12 @@ async def test_sync_status_reports_to_process_during_run(client, db, monkeypatch
     assert body["items_created"] == 3
 
 
-async def test_run_sync_job_updates_processed_incrementally(db, monkeypatch):
+async def test_run_sync_job_updates_processed_incrementally(db, session_factory, monkeypatch):
+    # session_factory is the conftest fixture bound to the TEST SQLite engine
+    # (a StaticPool shared with `db`), so the job sees the committed test user.
+    # Do NOT use the production get_session_factory() — it binds to Railway.
     from api.services import sync_state
     from api.routers import sync as sync_router
-    from api.db.session import get_session_factory
     from api.services.users import get_or_create_user
     from api.schemas.family_event import FamilyItem, ExtractionResponse
 
@@ -312,7 +314,7 @@ async def test_run_sync_job_updates_processed_incrementally(db, monkeypatch):
     monkeypatch.setattr(sync_router, "extract_events", fake_extract)
 
     sync_state.try_start(user.id)
-    await sync_router._run_sync_job(user.id, user.email, get_session_factory())
+    await sync_router._run_sync_job(user.id, user.email, session_factory)
 
     # processed was 0 before the first item, 1 before the second.
     assert seen == [0, 1]

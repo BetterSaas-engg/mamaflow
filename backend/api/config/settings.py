@@ -1,5 +1,10 @@
-from pydantic import model_validator
+import logging
+from zoneinfo import ZoneInfo
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 _WEAK_SECRETS = {"", "dev-secret-key", "your-jwt-secret-key"}
 
@@ -34,6 +39,41 @@ class Settings(BaseSettings):
     reminder_hour: int = 18
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    # The reminder knobs are cosmetic config: a bad value must degrade to the
+    # default with a warning, never crash the app at import (2026-07-15 prod
+    # outage: REMINDER_HOUR="10:30" -> ValidationError -> the whole API 502'd).
+    # Security-critical settings (SECRET_KEY below) still fail hard.
+    @field_validator("reminder_hour", mode="before")
+    @classmethod
+    def _tolerant_reminder_hour(cls, v: object) -> int:
+        try:
+            hour = int(v)  # type: ignore[arg-type]
+            if not 0 <= hour <= 23:
+                raise ValueError(f"hour {hour} out of range 0-23")
+            return hour
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "Invalid REMINDER_HOUR %r (%s); falling back to 18. "
+                "Use a whole hour 0-23 — the scheduler ticks on the hour.",
+                v,
+                exc,
+            )
+            return 18
+
+    @field_validator("reminder_tz", mode="before")
+    @classmethod
+    def _tolerant_reminder_tz(cls, v: object) -> str:
+        try:
+            ZoneInfo(str(v))
+            return str(v)
+        except Exception as exc:
+            logger.warning(
+                "Invalid REMINDER_TZ %r (%s); falling back to America/Toronto.",
+                v,
+                exc,
+            )
+            return "America/Toronto"
 
     @model_validator(mode="after")
     def _require_strong_secret_outside_dev(self) -> "Settings":
