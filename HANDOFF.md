@@ -151,6 +151,31 @@
 > new registration, then the live digest test (`REMINDER_HOUR` nudge + an open event dated
 > tomorrow).
 
+> **Update 2026-07-15 — 🚀 TRACK B VERIFIED LIVE END-TO-END.** The evening-before digest
+> ("Tomorrow's schedule — Doctor Appointment 11:00 AM") was delivered to the Android emulator's
+> notification shade at 12:00:00, one second after the APScheduler tick, from the production
+> backend: Gmail → OAuth → blocklist → Presidio → Claude → Postgres → tick → digest → FCM → shade.
+> Getting there surfaced and fixed three prod bugs (all merged to main, PR #8/#9):
+> 1. **REMINDER_HOUR="10:30" took the whole API down** (pydantic int validation fails at import →
+>    502 for everything). Reminder knobs (`REMINDER_HOUR`/`REMINDER_TZ`) are now fail-soft:
+>    bad values fall back to defaults with a warning; SECRET_KEY still fails hard. REMINDER_HOUR
+>    must be a whole hour 0-23 (documented in .env.example).
+> 2. **Every prod extraction had silently 400'd since the A3 strict-tool-use change**: Anthropic's
+>    strict mode rejects `enum` combined with a union type ("Enum value 'school' does not match
+>    declared type ['string','null']"). Mocked tests can't catch real API schema validation —
+>    found by running one real extraction locally. `event_type` is now `anyOf` (same vocabulary +
+>    null). Verified live: 36 messages scanned, soccer/dentist/doctor test emails all extracted
+>    with correct ISO dates and categories.
+> 3. **One failing message killed the whole sync job** — the loop now isolates per-message failures
+>    (skip + types-only log + rollback + user re-fetch after rollback, the MissingGreenlet twin of
+>    the reminder-engine Critical). A failed message writes no items row, so it retries next sync.
+> Also: frontend Dio connectTimeout 10s→30s (emulator NAT + slow cellular exceed 10s on cold TLS
+> connect). Known emulator-only wart: after OAuth consent the Custom Tab stays on a leftover
+> google.com page instead of auto-closing (the app gets the callback and signs in fine —
+> verified redirect works on real iPhone; re-check on a real Android device).
+> **USER: set REMINDER_HOUR back to 18 on Railway** (it's 12 from the test) and update
+> `ACCESS_TOKEN_EXPIRE_MINUTES=43200` (still 15 — sessions expire mid-testing constantly).
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
