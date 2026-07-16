@@ -192,3 +192,56 @@ def test_module_delete_token_uses_active_store(monkeypatch):
     token_store.delete_token("c@d.com")
 
     assert store.get("c@d.com") is None
+
+
+# --- Railway-compatible credentials (env JSON, no ADC file) ---
+
+
+def test_credentials_from_env_none_when_unset(monkeypatch):
+    from api.auth import token_store
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "google_application_credentials_json", "")
+    assert token_store._credentials_from_env() is None
+
+
+def test_credentials_from_env_builds_from_json(monkeypatch):
+    """GOOGLE_APPLICATION_CREDENTIALS_JSON (the whole service-account JSON in
+    an env var) must yield client credentials — Railway has no filesystem for
+    an ADC file. The google-auth parser is mocked; never a real key."""
+    from google.oauth2 import service_account
+
+    from api.auth import token_store
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings,
+        "google_application_credentials_json",
+        '{"type": "service_account", "project_id": "p"}',
+    )
+    sentinel = object()
+    captured = {}
+
+    def fake_from_info(info):
+        captured["info"] = info
+        return sentinel
+
+    monkeypatch.setattr(
+        service_account.Credentials, "from_service_account_info", fake_from_info
+    )
+    assert token_store._credentials_from_env() is sentinel
+    assert captured["info"] == {"type": "service_account", "project_id": "p"}
+
+
+def test_malformed_env_json_raises_sanitized_error(monkeypatch):
+    """Bad GOOGLE_APPLICATION_CREDENTIALS_JSON must surface as the sanitized
+    TokenStoreError (class contract), never a raw parse error that could ride
+    toward a client."""
+    from api.auth.token_store import TokenStoreError
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings, "google_application_credentials_json", "not-json{"
+    )
+    with pytest.raises(TokenStoreError):
+        SecretManagerTokenStore(project_id="proj-123")

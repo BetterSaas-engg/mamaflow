@@ -1,6 +1,7 @@
 """Evening-before reminder tick + APScheduler wiring. reminder_tick is testable
 independently of the scheduler; start/stop_scheduler wire it into the app
-lifespan (inert unless push_sender is configured)."""
+lifespan. Each job registers under its own condition (reminders need
+Firebase, auto-sync needs AUTO_SYNC_ENABLED); inert only when neither is wanted."""
 
 import datetime
 import logging
@@ -73,27 +74,44 @@ def _make_scheduler():
 
 
 def start_scheduler() -> None:
-    """Start the hourly reminder job — only if push is configured (inert
-    otherwise, so the app runs exactly as today when unset)."""
+    """Start the hourly jobs. Each registers under its own condition —
+    reminders need Firebase, auto-sync needs its knob — and the scheduler
+    only starts when at least one job is wanted (inert otherwise)."""
     global _scheduler
-    if not push_sender.is_configured():
-        _log.info("reminders: FIREBASE_CREDENTIALS_JSON unset — scheduler not started")
+    want_reminders = push_sender.is_configured()
+    want_auto_sync = settings.auto_sync_enabled
+    if not (want_reminders or want_auto_sync):
+        _log.info("scheduler: no jobs wanted — not started")
         return
     from apscheduler.triggers.cron import CronTrigger
 
     from api.db.session import get_session_factory
+    from api.services.auto_sync import auto_sync_tick
 
     session_factory = get_session_factory()
     _scheduler = _make_scheduler()
-    _scheduler.add_job(
-        reminder_tick,
-        CronTrigger(minute=0),
-        kwargs={"session_factory": session_factory},
-        id="reminder_tick",
-        replace_existing=True,
-    )
+    if want_reminders:
+        _scheduler.add_job(
+            reminder_tick,
+            CronTrigger(minute=0),
+            kwargs={"session_factory": session_factory},
+            id="reminder_tick",
+            replace_existing=True,
+        )
+    else:
+        _log.info("reminders: FIREBASE_CREDENTIALS_JSON unset — reminder job not registered")
+    if want_auto_sync:
+        _scheduler.add_job(
+            auto_sync_tick,
+            CronTrigger(minute=30),
+            kwargs={"session_factory": session_factory},
+            id="auto_sync_tick",
+            replace_existing=True,
+        )
     _scheduler.start()
-    _log.info("reminders: hourly scheduler started")
+    _log.info(
+        "scheduler started (reminders=%s, auto_sync=%s)", want_reminders, want_auto_sync
+    )
 
 
 def stop_scheduler() -> None:

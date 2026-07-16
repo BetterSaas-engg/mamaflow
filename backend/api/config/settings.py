@@ -26,9 +26,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on
-    # restart) or "secret-manager" (GCP, requires gcp_project_id + ADC creds).
+    # restart) or "secret-manager" (GCP, requires gcp_project_id + credentials).
     token_store_backend: str = "memory"
     gcp_project_id: str = ""
+    # Service-account JSON for Secret Manager, whole JSON in the env var
+    # (Railway has no filesystem for an ADC file). A credential: env only,
+    # never the DB or source (D4). Empty -> standard ADC file path.
+    google_application_credentials_json: str = ""
     # Min seconds between completed syncs per user (each sync = a full 30-day
     # metadata scan; repeated triggers are a cost/DoS vector — A2 audit).
     sync_cooldown_seconds: int = 60
@@ -37,6 +41,9 @@ class Settings(BaseSettings):
     firebase_credentials_json: str = ""
     reminder_tz: str = "America/Toronto"
     reminder_hour: int = 18
+    # Hourly background auto-sync (spec 2026-07-15). Kill switch; cosmetic
+    # knob, so parsing is fail-soft (never crashes the app at import).
+    auto_sync_enabled: bool = True
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -74,6 +81,21 @@ class Settings(BaseSettings):
                 exc,
             )
             return "America/Toronto"
+
+    @field_validator("auto_sync_enabled", mode="before")
+    @classmethod
+    def _tolerant_auto_sync_enabled(cls, v: object) -> bool:
+        if isinstance(v, bool):
+            return v
+        text = str(v).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        logger.warning(
+            "Invalid AUTO_SYNC_ENABLED %r; falling back to True.", v
+        )
+        return True
 
     @model_validator(mode="after")
     def _require_strong_secret_outside_dev(self) -> "Settings":

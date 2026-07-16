@@ -37,9 +37,11 @@ String resolveBaseUrl(
 
 /// The app's one Dio: bounded timeouts so a dead network fails a request
 /// instead of hanging a status poll (and its progress UI) forever.
+/// Connect is 30s: slow cellular and the Android emulator's NAT both
+/// routinely exceed 10s on a cold TLS connect (observed 2026-07-15).
 Dio buildDio({String? baseUrl}) => Dio(BaseOptions(
       baseUrl: baseUrl ?? resolveBaseUrl(),
-      connectTimeout: const Duration(seconds: 10),
+      connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 30),
       sendTimeout: const Duration(seconds: 30),
     ));

@@ -15,8 +15,8 @@ Gmail + Claude are mocked — never live. Load-bearing invariants:
 
 from api.auth.jwt import create_access_token
 from api.models.sender_blocklist import SenderBlocklist
-from api.routers import sync as sync_router
 from api.schemas.family_event import ExtractionResponse, FamilyItem
+from api.services import sync_runner
 from api.services.users import get_or_create_user
 
 
@@ -60,7 +60,7 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
         {"message_id": "m_ok", "sender": "school@allowed.org", "subject": "Soccer", "date": "Mon"},
         {"message_id": "m_block", "sender": "billing@blocked.com", "subject": "Invoice", "date": "Tue"},
     ]
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
 
     fetched_ids = []
 
@@ -68,9 +68,9 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
         fetched_ids.extend(ids)
         return {mid: "body" for mid in ids}
 
-    monkeypatch.setattr(sync_router, "fetch_message_bodies", fake_bodies)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", fake_bodies)
     monkeypatch.setattr(
-        sync_router, "extract_events",
+        sync_runner, "extract_events",
         lambda body, subject, sender, message_id="", email_date="": ExtractionResponse(
             events=[FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")]
         ),
@@ -102,7 +102,7 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
 
     body_calls = []
     extract_calls = []
@@ -115,8 +115,8 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
         extract_calls.append(message_id)
         return ExtractionResponse(events=[FamilyItem(item_type="event", event_title="X")])
 
-    monkeypatch.setattr(sync_router, "fetch_message_bodies", fake_bodies)
-    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", fake_bodies)
+    monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
     await client.post("/api/v1/sync", headers=_auth(token))
     first = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
@@ -139,8 +139,8 @@ async def test_sync_cooldown_returns_429(client, db, monkeypatch):
 
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 60)
     _, token = await _user_with_token(db)
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: [])
-    monkeypatch.setattr(sync_router, "fetch_message_bodies", lambda email, ids: {})
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: [])
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {})
 
     first = await client.post("/api/v1/sync", headers=_auth(token))
     second = await client.post("/api/v1/sync", headers=_auth(token))
@@ -173,7 +173,6 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
     # (a StaticPool shared with `db`), so the job sees the committed test user.
     # Do NOT use the production get_session_factory() — it binds to Railway.
     from api.services import sync_state
-    from api.routers import sync as sync_router
     from api.services.users import get_or_create_user
     from api.schemas.family_event import FamilyItem, ExtractionResponse
 
@@ -182,8 +181,8 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
         {"message_id": "a", "sender": "s@school.edu", "subject": "x", "date": ""},
         {"message_id": "b", "sender": "s@school.edu", "subject": "y", "date": ""},
     ]
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: meta)
-    monkeypatch.setattr(sync_router, "fetch_message_bodies", lambda email, ids: {i: "body" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: meta)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "body" for i in ids})
     # s@school.edu is not on the default blocklist, so both messages pass classify.
 
     # Record processed at each extract call to prove it increments mid-run.
@@ -193,10 +192,10 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
         seen.append(sync_state.get_state(user.id).processed)
         return ExtractionResponse(events=[FamilyItem(item_type="action", action_required="do")])
 
-    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
+    monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
     sync_state.try_start(user.id)
-    await sync_router._run_sync_job(user.id, user.email, session_factory)
+    await sync_runner.run_sync_job(user.id, user.email, session_factory)
 
     # processed was 0 before the first item, 1 before the second.
     assert seen == [0, 1]
@@ -211,7 +210,7 @@ async def test_failed_sync_reports_failed_status(client, db, monkeypatch):
     def boom(email):
         raise ValueError("gmail exploded")
 
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", boom)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", boom)
 
     resp = await client.post("/api/v1/sync", headers=_auth(token))
     assert resp.status_code == 202
@@ -234,9 +233,9 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
         {"message_id": "m_bad", "sender": "a@ok.org", "subject": "Bad", "date": "Mon"},
         {"message_id": "m_good", "sender": "b@ok.org", "subject": "Good", "date": "Tue"},
     ]
-    monkeypatch.setattr(sync_router, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
     monkeypatch.setattr(
-        sync_router, "fetch_message_bodies",
+        sync_runner, "fetch_message_bodies",
         lambda email, ids: {mid: "body" for mid in ids},
     )
 
@@ -247,7 +246,7 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
             events=[FamilyItem(item_type="event", event_title="Kept", date="2026-07-16")]
         )
 
-    monkeypatch.setattr(sync_router, "extract_events", fake_extract)
+    monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
     resp = await client.post("/api/v1/sync", headers=_auth(token))
     assert resp.status_code == 202

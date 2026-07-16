@@ -163,20 +163,25 @@ class _DayCell extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
         ),
         margin: const EdgeInsets.all(2),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('$day'),
-            const SizedBox(height: 2),
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: hasItems ? scheme.primary : Colors.transparent,
+        // FittedBox: on dense screens the fixed content (text + dot) can be a
+        // hair taller than the aspect-ratio cell — scale down, never overflow.
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('$day'),
+              const SizedBox(height: 2),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: hasItems ? scheme.primary : Colors.transparent,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
