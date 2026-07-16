@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     firebase_credentials_json: str = ""
     reminder_tz: str = "America/Toronto"
     reminder_hour: int = 18
+    # Hourly background auto-sync (spec 2026-07-15). Kill switch; cosmetic
+    # knob, so parsing is fail-soft (never crashes the app at import).
+    auto_sync_enabled: bool = True
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -78,6 +81,21 @@ class Settings(BaseSettings):
                 exc,
             )
             return "America/Toronto"
+
+    @field_validator("auto_sync_enabled", mode="before")
+    @classmethod
+    def _tolerant_auto_sync_enabled(cls, v: object) -> bool:
+        if isinstance(v, bool):
+            return v
+        text = str(v).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        logger.warning(
+            "Invalid AUTO_SYNC_ENABLED %r; falling back to True.", v
+        )
+        return True
 
     @model_validator(mode="after")
     def _require_strong_secret_outside_dev(self) -> "Settings":
