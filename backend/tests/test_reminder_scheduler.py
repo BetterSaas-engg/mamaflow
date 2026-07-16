@@ -4,6 +4,7 @@ from api.services import reminder_scheduler
 
 def test_start_scheduler_inert_when_unconfigured(monkeypatch):
     monkeypatch.setattr(settings, "firebase_credentials_json", "")
+    monkeypatch.setattr(settings, "auto_sync_enabled", False)
     reminder_scheduler._scheduler = None
 
     reminder_scheduler.start_scheduler()

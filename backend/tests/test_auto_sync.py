@@ -116,3 +116,63 @@ async def test_one_user_failure_does_not_stop_the_pass(
     await auto_sync.auto_sync_tick(session_factory)
 
     assert recorder.calls == [(ok.id, "ok@x.com")]
+
+
+from api.services import reminder_scheduler
+
+
+class _FakeScheduler:
+    def __init__(self):
+        self.jobs: dict[str, object] = {}
+        self.started = False
+
+    def add_job(self, func, trigger, kwargs=None, id=None, replace_existing=False):
+        self.jobs[id] = trigger
+
+    def start(self):
+        self.started = True
+
+    def shutdown(self, wait=False):
+        pass
+
+
+def _wire(monkeypatch, *, firebase: str, auto_sync: bool) -> _FakeScheduler:
+    from api.config.settings import settings as app_settings
+
+    fake = _FakeScheduler()
+    monkeypatch.setattr(app_settings, "firebase_credentials_json", firebase)
+    monkeypatch.setattr(app_settings, "auto_sync_enabled", auto_sync)
+    monkeypatch.setattr(reminder_scheduler, "_make_scheduler", lambda: fake)
+    reminder_scheduler._scheduler = None
+    reminder_scheduler.start_scheduler()
+    return fake
+
+
+def test_scheduler_registers_both_jobs_when_both_wanted(monkeypatch):
+    fake = _wire(monkeypatch, firebase='{"x": 1}', auto_sync=True)
+    assert set(fake.jobs) == {"reminder_tick", "auto_sync_tick"}
+    assert fake.started
+    # Exact offsets: reminders :00, auto-sync :30 (spec).
+    assert "minute='0'" in str(fake.jobs["reminder_tick"])
+    assert "minute='30'" in str(fake.jobs["auto_sync_tick"])
+    reminder_scheduler.stop_scheduler()
+
+
+def test_scheduler_starts_with_only_auto_sync(monkeypatch):
+    fake = _wire(monkeypatch, firebase="", auto_sync=True)
+    assert set(fake.jobs) == {"auto_sync_tick"}
+    assert fake.started
+    reminder_scheduler.stop_scheduler()
+
+
+def test_scheduler_starts_with_only_reminders(monkeypatch):
+    fake = _wire(monkeypatch, firebase='{"x": 1}', auto_sync=False)
+    assert set(fake.jobs) == {"reminder_tick"}
+    assert fake.started
+    reminder_scheduler.stop_scheduler()
+
+
+def test_scheduler_inert_when_nothing_wanted(monkeypatch):
+    _wire(monkeypatch, firebase="", auto_sync=False)
+    assert reminder_scheduler._scheduler is None
+    reminder_scheduler.stop_scheduler()  # safe no-op
