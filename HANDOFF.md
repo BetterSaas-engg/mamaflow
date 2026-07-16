@@ -176,6 +176,14 @@
 > **USER: set REMINDER_HOUR back to 18 on Railway** (it's 12 from the test) and update
 > `ACCESS_TOKEN_EXPIRE_MINUTES=43200` (still 15 — sessions expire mid-testing constantly).
 
+> **Auto-sync shipped 2026-07-16:** hourly background sync per signed-in user at minute :30
+> (reminders stay at :00, so the 18:00 digest reads data ≤30 min old). One sync implementation
+> (`services/sync_runner.py`, moved from the router) shared by POST /sync and the tick;
+> `sync_state.try_start` gates both (no double-runs; manual cooldown honored). Kill switch
+> `AUTO_SYNC_ENABLED` (default true, fail-soft). Users without a stored Gmail token are skipped —
+> universal coverage arrives when A1 (Secret Manager) is flipped on. Supersedes the A2 row's
+> "periodic auto-sync deferred" note. Spec/plan: docs/superpowers/{specs,plans}/2026-07-15-auto-sync*.
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |

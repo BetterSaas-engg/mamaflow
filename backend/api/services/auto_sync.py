@@ -9,6 +9,7 @@ import asyncio
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.auth.token_store import get_token
 from api.config.settings import settings
@@ -19,7 +20,9 @@ from api.services.sync_runner import run_sync_job
 _log = logging.getLogger(__name__)
 
 
-async def auto_sync_tick(session_factory) -> None:
+async def auto_sync_tick(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     """One hourly pass: sync every eligible user, sequentially. Per-user
     try/except — one user's failure never stops the pass (types-only logs)."""
     async with session_factory() as db:

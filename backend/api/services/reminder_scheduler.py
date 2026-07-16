@@ -1,6 +1,7 @@
 """Evening-before reminder tick + APScheduler wiring. reminder_tick is testable
 independently of the scheduler; start/stop_scheduler wire it into the app
-lifespan (inert unless push_sender is configured)."""
+lifespan. Each job registers under its own condition (reminders need
+Firebase, auto-sync needs AUTO_SYNC_ENABLED); inert only when neither is wanted."""
 
 import datetime
 import logging
