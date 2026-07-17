@@ -201,6 +201,12 @@
 > emulator: a >1h-old token that failed pre-fix refreshed and synced clean post-deploy. Commits: A1
 > env-JSON `c98d4b0`, refresh fix `85912d2`. Docs: `docs/a1-secret-manager-activation.md`.
 
+ **Update 2026-07-17 — Ad prototype (UX + build verification):** firewalled AdMob TEST banner anchored bottom of the shell,
+> gated by --dart-define=SHOW_ADS=true (off by default). Testers see ads working via test
+> creatives — no account, no cost, no ban risk. Real serving is a launch-time swap (real ids +
+> app-ads.txt at the E0 domain + published app + privacy-policy AdMob row). Build the tester
+> distribution WITH the flag; everyday builds omit it and behave as today.
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
