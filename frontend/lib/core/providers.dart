@@ -52,6 +52,13 @@ Dio buildDio({String? baseUrl}) => Dio(BaseOptions(
 const _iosClientId =
     String.fromEnvironment('GOOGLE_IOS_CLIENT_ID', defaultValue: '');
 
+// Ad prototype gate (spec 2026-07-17). Off unless the build passes
+// --dart-define=SHOW_ADS=true. Kept in core (not lib/ads) so nothing outside
+// lib/ads/ imports the ad SDK. Wrapped in a provider so widget tests can flip it.
+const kShowAds = bool.fromEnvironment('SHOW_ADS', defaultValue: false);
+
+final adsEnabledProvider = Provider<bool>((ref) => kShowAds);
+
 final tokenStoreProvider =
     Provider<TokenStore>((ref) => TokenStore(const FlutterSecureStorage()));
 
