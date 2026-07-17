@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
@@ -7,7 +9,15 @@ import 'ad_config.dart';
 /// fixed height so surrounding content never reflows when the ad fills; if the
 /// ad fails or never loads, the reserved area simply stays blank.
 class AdBannerSlot extends StatefulWidget {
-  const AdBannerSlot({super.key});
+  const AdBannerSlot({super.key, @visibleForTesting this.bannerBuilder});
+
+  /// Test-only seam: overrides how the underlying [BannerAd] is constructed
+  /// so a test can capture the [BannerAdListener] and invoke its callbacks
+  /// directly. The ad plugin channel is unregistered under `flutter test`, so
+  /// a real [BannerAd] never loads or fails on its own. Production code
+  /// always uses the default builder, so behavior there is unchanged.
+  @visibleForTesting
+  final BannerAd Function(BannerAdListener listener)? bannerBuilder;
 
   @override
   State<AdBannerSlot> createState() => _AdBannerSlotState();
@@ -24,24 +34,33 @@ class _AdBannerSlotState extends State<AdBannerSlot> {
     _load();
   }
 
+  static BannerAd _defaultBuilder(BannerAdListener listener) => BannerAd(
+        size: AdSize.banner,
+        adUnitId: AdConfig.bannerAdUnitId,
+        request: AdConfig.nonPersonalizedRequest(),
+        listener: listener,
+      );
+
   void _load() {
-    final banner = BannerAd(
-      size: AdSize.banner,
-      adUnitId: AdConfig.bannerAdUnitId,
-      request: AdConfig.nonPersonalizedRequest(),
-      listener: BannerAdListener(
-        onAdLoaded: (_) {
-          if (mounted) setState(() => _loaded = true);
-        },
-        // Load failure is non-fatal: dispose and leave the reserved slot blank.
-        onAdFailedToLoad: (ad, _) => ad.dispose(),
-      ),
+    final listener = BannerAdListener(
+      onAdLoaded: (_) {
+        if (mounted) setState(() => _loaded = true);
+      },
+      // Load failure is non-fatal: dispose and leave the reserved slot blank.
+      // Null out `_banner` so `State.dispose()` doesn't dispose it again.
+      onAdFailedToLoad: (ad, _) {
+        ad.dispose();
+        _banner = null;
+      },
     );
+    final banner = (widget.bannerBuilder ?? _defaultBuilder)(listener);
     _banner = banner;
-    // Best-effort: a missing plugin/channel (e.g. tests) must never throw.
-    try {
-      banner.load();
-    } catch (_) {}
+    // BannerAd.load() is `Future<void> load() async` — it never throws
+    // synchronously, so a try/catch around the call below is dead code; any
+    // genuine async load error is swallowed here instead. The no-throw/
+    // no-reflow guarantee for this widget is structural: build() always
+    // returns the reserved SizedBox regardless of load outcome.
+    unawaited(banner.load().catchError((Object _) {}));
   }
 
   @override
