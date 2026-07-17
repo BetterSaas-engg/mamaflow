@@ -62,11 +62,29 @@ decision (Dn) alongside this spec. D19 (THE FIREWALL) and D21 are **unchanged**.
 ## Gating
 
 `--dart-define=SHOW_ADS=true` (default **false**), read once in `AdConfig.adsEnabled`
-(`bool.fromEnvironment('SHOW_ADS', defaultValue: false)`). Off in every normal build — testers,
-the E0/launch build — so the prototype can never accidentally ship. Matches the existing
-`API_BASE_URL` / `GOOGLE_IOS_CLIENT_ID` dart-define pattern.
+(`bool.fromEnvironment('SHOW_ADS', defaultValue: false)`). Off unless explicitly built with the
+flag, so a stray build can never surface ads. Matches the existing `API_BASE_URL` /
+`GOOGLE_IOS_CLIENT_ID` dart-define pattern.
+
+- **Test distribution** (what testers get): build **with** `--dart-define=SHOW_ADS=true` so the
+  banner is visible and testers see ads working.
+- **Everyday dev / a default build:** omit the flag → no ads, app behaves exactly as today.
 
 To run it: `flutter run … --dart-define=SHOW_ADS=true` (plus the usual API/client-id defines).
+
+## Distribution & launch path (decided 2026-07-17)
+
+- **Now (this spec):** the banner serves Google's **test** ad units. Testers see a working ad;
+  **no AdMob account, no cost, no invalid-traffic ban risk.** Test ads render through the real
+  SDK, so load/latency/layout/perf are representative.
+- **Never:** real (advertiser) ads shown to testers — AdMob treats that as invalid traffic and
+  can suspend the account. Real ads only serve to real users, post-launch.
+- **At launch (documented follow-up, NOT built here):** a ~30-min swap — create the real AdMob
+  account, register the app, replace the test **App ID** (manifest + `Info.plist`) and the test
+  **ad-unit IDs** (`AdConfig`) with real ones, add a `RequestConfiguration` test-device list so
+  internal devices still get test ads, publish `app-ads.txt` at the (E0) domain, and add an
+  **AdMob sub-processor row to the privacy policy** (mirrors the Firebase/FCM row). Real serving
+  additionally needs the domain + a published, AdMob-reviewed app.
 
 ## Platform config (already present — no change)
 
