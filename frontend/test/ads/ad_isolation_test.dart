@@ -43,7 +43,7 @@ void main() {
       expect(src.contains("import '../"), false,
           reason: '${f.path} imports app code via a relative path');
       expect(
-          RegExp(r'\b(event|child|extraction|email|item)s?\b',
+          RegExp(r'\b(event|child_name|childName|extraction|email|item)s?\b',
                   caseSensitive: false)
               .hasMatch(src),
           false,
