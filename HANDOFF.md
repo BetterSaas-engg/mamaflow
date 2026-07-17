@@ -184,6 +184,23 @@
 > universal coverage arrives when A1 (Secret Manager) is flipped on. Supersedes the A2 row's
 > "periodic auto-sync deferred" note. Spec/plan: docs/superpowers/{specs,plans}/2026-07-15-auto-sync*.
 
+> **Update 2026-07-17 — 🔐 A1 DONE (durable Gmail tokens) — LIVE + VERIFIED, plus a critical
+> latent-bug fix it exposed.** Secret Manager token store activated on Railway (`TOKEN_STORE_BACKEND=
+> secret-manager`, `GCP_PROJECT_ID=mamaflow-prod`, `GOOGLE_APPLICATION_CREDENTIALS_JSON` = the
+> `mamaflow-backend` SA key; the env-JSON credentials path shipped so Railway needs no ADC file).
+> Proven end-to-end: a Gmail token survived a backend restart and was read back from Secret Manager
+> — the re-sign-in-after-every-deploy era is over. **Durability immediately exposed a
+> production-critical latent bug:** mobile sign-in stores `client_secret=None` (iOS public client,
+> D23/D28), but google-auth's `Credentials.refresh()` refuses to refresh without a secret, so every
+> Gmail call failed once the ~1h access token expired. In-memory storage had hidden it (tokens never
+> outlived the access token) — every real user would have broken ~1h after signing in. **Fixed**
+> (`services/google_token.py` `ensure_fresh`: public-client refresh — client_id + refresh_token, no
+> secret, RFC 6749 §6 — re-stores the fresh token to Secret Manager; sign-in now stamps `expiry`;
+> revoked/absent → `ReauthRequired` → "Please sign in again"; Google 5xx → transient retry). Security
+> audit PASS (ReauthRequired carries no PII; types-only logs). 163 backend tests. Verified on
+> emulator: a >1h-old token that failed pre-fix refreshed and synced clean post-deploy. Commits: A1
+> env-JSON `c98d4b0`, refresh fix `85912d2`. Docs: `docs/a1-secret-manager-activation.md`.
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
