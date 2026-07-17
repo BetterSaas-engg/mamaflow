@@ -74,3 +74,32 @@ def test_extract_header_missing_returns_empty():
 def test_extract_header_malformed_entries_are_skipped():
     headers = [{}, {"name": "From"}, {"value": "x"}, {"name": "From", "value": "ok@x.c"}]
     assert _extract_header(headers, "From") == "ok@x.c"
+
+
+def test_build_gmail_client_refreshes_mobile_token(monkeypatch):
+    """The Gmail client must be built from a fresh token: _build_gmail_client
+    routes the stored credential through google_token.ensure_fresh (which
+    refreshes an expired mobile PKCE credential) before constructing creds."""
+    from api.services import gmail_reader
+
+    stored = {
+        "token": "FAKE-STALE", "refresh_token": "FAKE-R",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "ios", "client_secret": None, "scopes": ["s"],
+    }
+    monkeypatch.setattr(gmail_reader, "get_token", lambda email: dict(stored))
+    monkeypatch.setattr(
+        gmail_reader, "ensure_fresh",
+        lambda email, td: {**td, "token": "FAKE-FRESH"},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        gmail_reader, "Credentials",
+        lambda **kw: captured.update(kw) or object(),
+    )
+    monkeypatch.setattr(gmail_reader, "build", lambda *a, **k: "gmail-client")
+
+    client = gmail_reader._build_gmail_client("p@x.com")
+
+    assert client == "gmail-client"
+    assert captured["token"] == "FAKE-FRESH"  # the REFRESHED token, not the stale one
