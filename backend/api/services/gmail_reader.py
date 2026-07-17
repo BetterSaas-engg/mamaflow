@@ -5,6 +5,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from api.auth.token_store import get_token
+from api.services.google_token import ensure_fresh
 
 MAX_PREVIEW_MESSAGES = 50
 
@@ -13,6 +14,10 @@ def _build_gmail_client(user_email: str):
     token_data = get_token(user_email)
     if not token_data:
         raise ValueError(f"No stored token for {user_email}")
+
+    # Mobile PKCE credentials (client_secret is None) can't be refreshed by
+    # google-auth; refresh + re-store them here before building the client.
+    token_data = ensure_fresh(user_email, token_data)
 
     creds = Credentials(
         token=token_data["token"],

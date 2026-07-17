@@ -257,3 +257,23 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
 
     listed = (await client.get("/api/v1/items", headers=_auth(token))).json()["items"]
     assert [i["event_title"] for i in listed] == ["Kept"]
+
+
+async def test_reauth_required_surfaces_clean_message(client, db, monkeypatch):
+    """A revoked/absent Gmail token (ReauthRequired) must fail the sync with a
+    'sign in again' message via the specific handler — not the generic 'Sync
+    failed' path whose _log.exception would log the traceback."""
+    from api.services.google_token import ReauthRequired
+
+    _, token = await _user_with_token(db)
+
+    def needs_reauth(email):
+        raise ReauthRequired
+
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", needs_reauth)
+
+    resp = await client.post("/api/v1/sync", headers=_auth(token))
+    assert resp.status_code == 202
+    status = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+    assert status["status"] == "failed"
+    assert status["error"] == "Please sign in again."

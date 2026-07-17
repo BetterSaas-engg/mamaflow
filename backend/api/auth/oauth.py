@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -192,6 +193,10 @@ async def exchange_code_pkce(
         settings.google_ios_client_id,
     )
 
+    # Stamp an absolute expiry so the token store knows when to refresh (the
+    # mobile PKCE credential has no client_secret, so google-auth can't refresh
+    # it — google_token.ensure_fresh does, keyed off this expiry).
+    lifetime = int(tokens.get("expires_in", 3600))
     creds_data = {
         "token": tokens.get("access_token"),
         "refresh_token": tokens.get("refresh_token"),
@@ -199,6 +204,10 @@ async def exchange_code_pkce(
         "client_id": settings.google_ios_client_id,
         "client_secret": None,
         "scopes": (tokens.get("scope") or "").split(),
+        "expiry": (
+            datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(seconds=lifetime)
+        ).isoformat(),
     }
     return creds_data, id_info["email"]
 

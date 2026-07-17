@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from api.models.user import User
 from api.services import sync_state
 from api.services.ai_extractor import extract_events
+from api.services.google_token import ReauthRequired
 from api.services.gmail_reader import fetch_message_bodies, fetch_recent_metadata
 from api.services.items import existing_message_ids, persist_items
 from api.services.privacy_pipeline import redact_pii
@@ -141,6 +142,13 @@ async def run_sync_job(
                 processed=len(new_passed),
                 items_created=items_created,
             )
+    except ReauthRequired:
+        # The Gmail token can't be refreshed (revoked/absent). Types-only log
+        # (user_id, no email/traceback), and a client message that tells the
+        # user what to actually do. Must precede the generic handler, whose
+        # _log.exception would attach the full traceback.
+        _log.warning("sync: reauth required for user %s", user_id)
+        sync_state.fail(user_id, "Please sign in again.")
     except Exception:
         # Full detail to server logs; only a sanitized message to the client.
         _log.exception("sync failed for user %s", user_id)
