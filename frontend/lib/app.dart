@@ -6,6 +6,7 @@ import 'auth/session_controller.dart';
 import 'theme/app_theme.dart';
 import 'ui/home_shell.dart';
 import 'ui/sign_in_screen.dart';
+import 'ui/widgets/brand_splash.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -52,7 +53,7 @@ class AuthGate extends ConsumerWidget {
     final session = ref.watch(sessionProvider);
     return session.when(
       data: (signedIn) => signedIn ? const HomeShell() : const SignInScreen(),
-      loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
+      loading: () => const BrandSplash(),
       // A failed hydrate (e.g. no secure storage yet) means "not signed in".
       error: (_, _) => const SignInScreen(),
     );
