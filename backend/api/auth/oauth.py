@@ -62,7 +62,12 @@ async def google_login():
     return RedirectResponse(auth_url)
 
 
-@router.get("/google/callback")
+class WebCallbackResponse(BaseModel):
+    message: str
+    email: str
+
+
+@router.get("/google/callback", response_model=WebCallbackResponse)
 async def google_callback(request: Request):
     if request.query_params.get("error"):
         # The user denied consent (or Google reported an OAuth error code).
@@ -103,7 +108,9 @@ async def google_callback(request: Request):
     credentials = flow.credentials
     user_email = id_info["email"]
 
-    store_token(user_email, {
+    # store_token is a blocking gRPC call on the secret-manager backend —
+    # off the loop, like the Google calls above.
+    await asyncio.to_thread(store_token, user_email, {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": credentials.token_uri,
@@ -112,10 +119,7 @@ async def google_callback(request: Request):
         "scopes": list(credentials.scopes),
     })
 
-    return {
-        "message": "OAuth successful",
-        "email": user_email,
-    }
+    return WebCallbackResponse(message="OAuth successful", email=user_email)
 
 
 # --- Mobile auth (D23): OAuth 2.0 authorization-code + PKCE ---
@@ -237,7 +241,8 @@ async def google_mobile_auth(
 
     user = await get_or_create_user(db, email)
     # Token store keyed by the user's normalized email so Gmail lookups align.
-    store_token(user.email, creds_data)
+    # Blocking gRPC on the secret-manager backend — off the loop.
+    await asyncio.to_thread(store_token, user.email, creds_data)
 
     token = create_access_token(subject=str(user.id), email=user.email)
 

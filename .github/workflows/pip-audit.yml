@@ -1,0 +1,28 @@
+# Dependency-vulnerability scan (2026-07-18 audit): requirements.txt uses >=
+# floors, so what actually installs drifts — audit it on change and weekly.
+name: pip-audit
+
+on:
+  push:
+    paths:
+      - "backend/requirements.txt"
+      - ".github/workflows/pip-audit.yml"
+  pull_request:
+    paths:
+      - "backend/requirements.txt"
+      - ".github/workflows/pip-audit.yml"
+  schedule:
+    - cron: "0 13 * * 1" # weekly, Monday morning ET
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit backend dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: backend/requirements.txt

@@ -184,6 +184,88 @@
 > universal coverage arrives when A1 (Secret Manager) is flipped on. Supersedes the A2 row's
 > "periodic auto-sync deferred" note. Spec/plan: docs/superpowers/{specs,plans}/2026-07-15-auto-sync*.
 
+> **Update 2026-07-17 — 🔐 A1 DONE (durable Gmail tokens) — LIVE + VERIFIED, plus a critical
+> latent-bug fix it exposed.** Secret Manager token store activated on Railway (`TOKEN_STORE_BACKEND=
+> secret-manager`, `GCP_PROJECT_ID=mamaflow-prod`, `GOOGLE_APPLICATION_CREDENTIALS_JSON` = the
+> `mamaflow-backend` SA key; the env-JSON credentials path shipped so Railway needs no ADC file).
+> Proven end-to-end: a Gmail token survived a backend restart and was read back from Secret Manager
+> — the re-sign-in-after-every-deploy era is over. **Durability immediately exposed a
+> production-critical latent bug:** mobile sign-in stores `client_secret=None` (iOS public client,
+> D23/D28), but google-auth's `Credentials.refresh()` refuses to refresh without a secret, so every
+> Gmail call failed once the ~1h access token expired. In-memory storage had hidden it (tokens never
+> outlived the access token) — every real user would have broken ~1h after signing in. **Fixed**
+> (`services/google_token.py` `ensure_fresh`: public-client refresh — client_id + refresh_token, no
+> secret, RFC 6749 §6 — re-stores the fresh token to Secret Manager; sign-in now stamps `expiry`;
+> revoked/absent → `ReauthRequired` → "Please sign in again"; Google 5xx → transient retry). Security
+> audit PASS (ReauthRequired carries no PII; types-only logs). 163 backend tests. Verified on
+> emulator: a >1h-old token that failed pre-fix refreshed and synced clean post-deploy. Commits: A1
+> env-JSON `c98d4b0`, refresh fix `85912d2`. Docs: `docs/a1-secret-manager-activation.md`.
+
+ **Update 2026-07-17 — Ad prototype (UX + build verification):** firewalled AdMob TEST banner anchored bottom of the shell,
+> gated by --dart-define=SHOW_ADS=true (off by default). Testers see ads working via test
+> creatives — no account, no cost, no ban risk. Real serving is a launch-time swap (real ids +
+> app-ads.txt at the E0 domain + published app + privacy-policy AdMob row). Build the tester
+> distribution WITH the flag; everyday builds omit it and behave as today.
+
+> **Update 2026-07-17 — UI redesign: warm & friendly ("Mama Coral").** The app was baseline-purple
+> Material 3 with zero theme; it now has a cohesive design system + redesigned Agenda & Calendar.
+> Plan `docs/superpowers/plans/2026-07-17-ui-redesign.md`. Presentation-only — grouping/filters/
+> providers and every find-by-text test contract untouched; 90 frontend tests green, `flutter analyze`
+> clean; firewall guard 0 (no `lib/ads/` change). **Foundation** (`lib/theme/`): `tokens.dart`
+> (spacing/radii/shadow/motion), `app_colors.dart` (`ColorScheme.fromSeed(#F27E63)` + warm cream
+> surfaces), `category_colors.dart` (event-type → color+icon, deterministic fallback), `app_theme.dart`
+> (light theme + all component themes + app-wide fade/slide page transitions; dark theme is a stubbed
+> fast-follow, ships **light-only**). Fonts: **Nunito** (body) + **Fredoka** (headlines/wordmark),
+> bundled variable TTFs in `assets/fonts/` (offline — `google_fonts` intentionally dropped, no runtime
+> fetch, fits the privacy stance). Dep added: `flutter_animate`. **Shared components** (`lib/ui/widgets/`):
+> `ItemCard` (category badge + meta pills + swipe done/dismiss with haptics + one-shot staggered
+> entrance; `interactive:false` for the calendar), `SectionHeader`, `FilterChipBar` (animated select),
+> `EmptyState`/`ErrorState`/`LoadingState`, `SyncProgressCard`. Agenda & Calendar rewired onto them;
+> calendar gained category-colored day dots + warm animated cells + a dense day list. **Documented
+> fast-follow (out of scope):** per-screen polish for sign-in/item-detail/settings (they inherit the
+> theme now), dark theme, launcher-icon rebrand. Foundation `108e4f5..881dd89`; components+screens+motion
+> `881dd89..c5095ca`. **USER: on-device eyeball pending** (`flutter run` + `--dart-define=SHOW_ADS=true`
+> to confirm the coral theme, category dots, staggered entrance, swipe+haptics, and that the ad slot
+> still lays out below content).
+
+> **Update 2026-07-17 — Branding: logo + landing/sign-in + splash + launcher icon.** Plan
+> `docs/superpowers/plans/2026-07-17-branding-logo-landing-splash.md`, spec
+> `docs/superpowers/specs/2026-07-17-branding-logo-landing-splash-design.md`. The heart-in-bubble
+> `AppLogo` (vector) now brands: the redesigned sign-in/landing (logo + Fredoka wordmark + three
+> trust lines + in-button loading), an in-app hydrate splash (`BrandSplash`), the native launch
+> screen (coral + logo, iOS + Android 12), and the launcher icon (iOS + Android adaptive) — killing
+> the default Flutter icon/splash before the tester distribution. Master PNGs are generated from the
+> same painter (`tool/generate_brand_assets.dart`) so nothing drifts. Presentation/config only;
+> firewall untouched; sign-in test invariants preserved. **USER: rebuild on device to see the new
+> icon/splash** (native assets only appear on a fresh install/run).
+
+> **Update 2026-07-18 — Full backend maintainability audit (code-maintainability-audit skill) +
+> event-loop fix batch.** Three parallel audits (async/parsing, Pydantic/UUID-UTC/soft-delete,
+> secrets/deps/errors) over `backend/api/`. Clean: IDs & time, soft delete, secrets (env 1:1 with
+> `.env.example`, tokens never in DB/logs, nothing in git history), deps (all used, pinned),
+> error hygiene (types-only logging holds everywhere), defensive parsing (extractor/gmail/token/FCM).
+> **Fixed same day (TDD, security-audited PASS, 167 backend tests):** all four blocking-call
+> findings wrapped in `asyncio.to_thread` — `redact_pii` in the sync loop (must-fix: Presidio is
+> CPU-bound; stalled every concurrent request during a sync), `token_store.get/delete_token` in
+> `delete_account`, and `store_token` in both OAuth handlers (blocking Secret Manager gRPC in the
+> sign-in hot path). Four regression tests assert these run off the loop thread.
+> **Should-fix batch DONE same day (TDD, security-audited PASS, 175 backend tests):**
+> `FamilyItem.event_type` now `Literal` of the 8-value vocabulary + a before-validator coercing
+> unknown values to `"other"` (never hard-fails — D34; wire schema in content_wrapper untouched,
+> anyOf quirk preserved); `?type=` on GET /items now `Literal` (typo → 422);
+> `ItemRead.item_type/status` now `Literal`; `google_callback` returns `WebCallbackResponse`
+> (same shape, now in OpenAPI); **first CI workflow added** — `.github/workflows/pip-audit.yml`
+> (on requirements.txt change + weekly). Nits still queued: `msg["id"]` direct indexing in
+> gmail_reader (whole-batch failure vs per-message isolation), delete `blocked_domains.json`
+> (already in hygiene queue); DB CHECK on `items.event_type` deliberately skipped (D34).
+> **PR #12 opened** (28 commits: ad prototype + redesign + branding + audit fixes; no new
+> migrations). **Full CI added** (`.github/workflows/ci.yml`): on PRs + main pushes — backend
+> pytest (Python 3.14 + en_core_web_lg, mirroring the Railway Dockerfile; settings need no .env,
+> verified), flutter analyze+test (3.44.3), and the firewall guard run server-side (hooks only
+> cover machines that installed them). **USER (GitHub/Railway settings, not code):** mark the
+> three CI jobs required checks with branch protection on `main`, and enable Railway's
+> "Wait for CI" so a red `main` never deploys.
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |

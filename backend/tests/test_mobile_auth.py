@@ -59,6 +59,29 @@ async def test_gmail_tokens_stored_server_side(client, monkeypatch):
     assert stored["refresh_token"] == "1//refresh"
 
 
+async def test_mobile_auth_stores_token_off_the_event_loop(client, monkeypatch):
+    """With the secret-manager backend, store_token is a blocking gRPC call —
+    it must not run on the event loop in the sign-in hot path."""
+    import threading
+
+    async def _fake_exchange(code, code_verifier):
+        return FAKE_CREDS, "parent@example.com"
+
+    monkeypatch.setattr(oauth, "exchange_code_pkce", _fake_exchange)
+
+    store_threads = []
+    monkeypatch.setattr(
+        oauth, "store_token",
+        lambda email, data: store_threads.append(threading.get_ident()),
+    )
+
+    resp = await client.post("/api/v1/auth/google/mobile", json=BODY)
+
+    assert resp.status_code == 200
+    assert store_threads, "store_token was never called"
+    assert store_threads[0] != threading.get_ident()
+
+
 async def test_invalid_code_returns_400(client, monkeypatch):
     async def _boom(code, code_verifier):
         raise ValueError("bad code")

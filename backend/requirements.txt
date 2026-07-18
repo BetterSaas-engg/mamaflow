@@ -10,6 +10,9 @@ google-cloud-secret-manager>=2.20.0   # durable Gmail token store (D4)
 
 # Auth
 PyJWT>=2.9.0
+# Transitive (google-auth/firebase-admin), floored explicitly: wheels before
+# 48.0.1 bundle a vulnerable OpenSSL (GHSA-537c-gmf6-5ccf, pip-audit).
+cryptography>=48.0.1
 
 # Claude API
 anthropic>=0.39.0

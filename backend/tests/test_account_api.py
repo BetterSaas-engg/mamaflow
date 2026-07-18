@@ -85,6 +85,34 @@ async def test_delete_account_survives_revocation_failure(client, db, monkeypatc
     assert token_store.get_token(user.email) is None
 
 
+async def test_token_store_calls_run_off_the_event_loop(client, db, monkeypatch):
+    """With TOKEN_STORE_BACKEND=secret-manager, get/delete are blocking gRPC
+    round-trips — they must not run on the event loop (revoke_gmail_token in
+    between them already doesn't)."""
+    import threading
+
+    user, token = await _user_with_token(db)
+    monkeypatch.setattr(account_service, "revoke_gmail_token", lambda creds: None)
+
+    call_threads = {}
+
+    def rec_get(email):
+        call_threads["get"] = threading.get_ident()
+        return {"token": "at"}
+
+    def rec_delete(email):
+        call_threads["delete"] = threading.get_ident()
+
+    monkeypatch.setattr(account_service.token_store, "get_token", rec_get)
+    monkeypatch.setattr(account_service.token_store, "delete_token", rec_delete)
+
+    resp = await client.delete("/api/v1/account", headers=_auth(token))
+
+    assert resp.status_code == 204
+    assert call_threads.get("get") not in (None, threading.get_ident())
+    assert call_threads.get("delete") not in (None, threading.get_ident())
+
+
 async def test_delete_account_requires_auth(client):
     resp = await client.delete("/api/v1/account")
     assert resp.status_code == 401

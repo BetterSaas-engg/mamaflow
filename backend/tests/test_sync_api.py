@@ -204,6 +204,42 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
     assert final.to_process == 2
 
 
+async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypatch):
+    """Presidio's analyzer is CPU-bound spaCy work; on the event loop it stalls
+    every concurrent request for the whole sync. It must go through
+    asyncio.to_thread like its siblings (fetch_message_bodies, extract_events)."""
+    import threading
+    from types import SimpleNamespace
+
+    from api.services import sync_state
+    from api.services.users import get_or_create_user
+
+    user = await get_or_create_user(db, "offloop@example.com")
+    meta = [{"message_id": "t1", "sender": "s@school.edu", "subject": "x", "date": ""}]
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: meta)
+    monkeypatch.setattr(
+        sync_runner, "fetch_message_bodies", lambda email, ids: {i: "body" for i in ids}
+    )
+    monkeypatch.setattr(
+        sync_runner, "extract_events",
+        lambda *a, **k: ExtractionResponse(events=[]),
+    )
+
+    redact_threads = []
+
+    def fake_redact(text):
+        redact_threads.append(threading.get_ident())
+        return SimpleNamespace(redacted_text=text)
+
+    monkeypatch.setattr(sync_runner, "redact_pii", fake_redact)
+
+    sync_state.try_start(user.id)
+    await sync_runner.run_sync_job(user.id, user.email, session_factory)
+
+    assert redact_threads, "redact_pii was never called"
+    assert all(t != threading.get_ident() for t in redact_threads)
+
+
 async def test_failed_sync_reports_failed_status(client, db, monkeypatch):
     _, token = await _user_with_token(db)
 

@@ -50,10 +50,12 @@ async def delete_account(db: AsyncSession, user: User) -> None:
     user.deleted_at = now
     await db.commit()
 
-    creds = token_store.get_token(user.email)
+    # With the secret-manager backend, get/delete are blocking gRPC calls —
+    # keep them off the event loop, like the revoke in between.
+    creds = await asyncio.to_thread(token_store.get_token, user.email)
     if creds is not None:
         try:
             await asyncio.to_thread(revoke_gmail_token, creds)
         except Exception as exc:  # defensive: revoke_gmail_token shouldn't raise
             _log.warning("gmail token revoke raised (%s)", type(exc).__name__)
-    token_store.delete_token(user.email)
+    await asyncio.to_thread(token_store.delete_token, user.email)

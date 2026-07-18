@@ -66,4 +66,21 @@ void main() {
 
     expect(find.text('Could not update the item.'), findsOneWidget);
   });
+
+  testWidgets('swiping an open item right marks it done', (tester) async {
+    final svc = _MockService();
+    when(() => svc.list(status: any(named: 'status')))
+        .thenAnswer((_) async => [_item('Soccer')]);
+    when(() => svc.updateStatus(any(), any()))
+        .thenAnswer((_) async => _item('Soccer'));
+
+    await tester.pumpWidget(_host(svc));
+    await tester.pumpAndSettle();
+
+    // Swipe left-to-right (startToEnd) past the dismiss threshold → 'done'.
+    await tester.drag(find.byType(Dismissible).first, const Offset(600, 0));
+    await tester.pumpAndSettle();
+
+    verify(() => svc.updateStatus('Soccer', 'done')).called(1);
+  });
 }

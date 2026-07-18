@@ -1,9 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ads/ad_banner_slot.dart';
 import '../core/providers.dart';
 import 'calendar_screen.dart';
 import 'home_screen.dart';
+
+/// The signed-in shell body with an optional anchored ad slot below the
+/// content. Extracted so the flag-conditional is unit-testable without pumping
+/// the full screen stack. FIREWALL: passes the slot no content data.
+Widget adAnchoredBody({required bool showAds, required Widget content}) {
+  return Column(
+    children: [
+      Expanded(child: content),
+      if (showAds) const AdBannerSlot(),
+    ],
+  );
+}
 
 /// Signed-in shell: a bottom nav switching between the Agenda (grouped list)
 /// and the month Calendar. IndexedStack keeps each tab's state.
@@ -28,10 +41,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final showAds = ref.watch(adsEnabledProvider);
     return Scaffold(
-      body: IndexedStack(
-        index: _index,
-        children: const [HomeScreen(), CalendarScreen()],
+      body: adAnchoredBody(
+        showAds: showAds,
+        content: IndexedStack(
+          index: _index,
+          children: const [HomeScreen(), CalendarScreen()],
+        ),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,

@@ -11,7 +11,13 @@ carry an action_required (e.g. "call to confirm").
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+# Must stay in sync with the anyOf enum in content_wrapper._EXTRACTION_JSON_SCHEMA.
+EVENT_TYPES = (
+    "school", "medical", "sports", "playdate",
+    "camp", "birthday", "recital", "other",
+)
 
 
 class FamilyItem(BaseModel):
@@ -22,7 +28,23 @@ class FamilyItem(BaseModel):
     time: str | None = None
     location: str | None = None
     child_name: str | None = None
-    event_type: str | None = None  # e.g. "school", "medical", "sports", "playdate", "camp"
+    event_type: (
+        Literal[
+            "school", "medical", "sports", "playdate",
+            "camp", "birthday", "recital", "other",
+        ]
+        | None
+    ) = None
+
+    @field_validator("event_type", mode="before")
+    @classmethod
+    def _unknown_event_type_becomes_other(cls, v):
+        # The tool schema constrains the vocabulary, but if it ever drifts or
+        # is bypassed, an unexpected value must degrade to "other" — never
+        # fail validation and drop the whole message's events (2026-07-15).
+        if v is None or v in EVENT_TYPES:
+            return v
+        return "other"
     source_sender: str | None = None
     source_email_link: str | None = None
 

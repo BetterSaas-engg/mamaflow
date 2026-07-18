@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 class ItemRead(BaseModel):
     id: str
-    item_type: str
-    status: str
+    item_type: Literal["event", "action"]
+    status: Literal["open", "done", "dismissed"]
     event_title: str | None = None
     action_required: str | None = None
     date: str | None = None
