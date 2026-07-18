@@ -46,6 +46,7 @@ dependencies:
   flutter_web_auth_2: ^4.0.0   # OAuth2 PKCE code flow (mobile Google sign-in, D23)
   crypto: ^3.0.0               # PKCE S256 challenge
   url_launcher: ^6.3.2
+  flutter_animate: ^4.5.0      # tasteful UI motion (staggered entrances, done/dismiss)
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +70,17 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Brand fonts (bundled variable TTFs — fully offline, no runtime fetch, so
+  # nothing about the UI reaches Google; matches the privacy positioning).
+  # Nunito = body/UI (warm, rounded, legible); Fredoka = headlines/wordmark.
+  fonts:
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito.ttf
+    - family: Fredoka
+      fonts:
+        - asset: assets/fonts/Fredoka.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:
