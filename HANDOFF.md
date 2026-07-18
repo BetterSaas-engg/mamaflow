@@ -207,6 +207,27 @@
 > app-ads.txt at the E0 domain + published app + privacy-policy AdMob row). Build the tester
 > distribution WITH the flag; everyday builds omit it and behave as today.
 
+> **Update 2026-07-17 — UI redesign: warm & friendly ("Mama Coral").** The app was baseline-purple
+> Material 3 with zero theme; it now has a cohesive design system + redesigned Agenda & Calendar.
+> Plan `docs/superpowers/plans/2026-07-17-ui-redesign.md`. Presentation-only — grouping/filters/
+> providers and every find-by-text test contract untouched; 90 frontend tests green, `flutter analyze`
+> clean; firewall guard 0 (no `lib/ads/` change). **Foundation** (`lib/theme/`): `tokens.dart`
+> (spacing/radii/shadow/motion), `app_colors.dart` (`ColorScheme.fromSeed(#F27E63)` + warm cream
+> surfaces), `category_colors.dart` (event-type → color+icon, deterministic fallback), `app_theme.dart`
+> (light theme + all component themes + app-wide fade/slide page transitions; dark theme is a stubbed
+> fast-follow, ships **light-only**). Fonts: **Nunito** (body) + **Fredoka** (headlines/wordmark),
+> bundled variable TTFs in `assets/fonts/` (offline — `google_fonts` intentionally dropped, no runtime
+> fetch, fits the privacy stance). Dep added: `flutter_animate`. **Shared components** (`lib/ui/widgets/`):
+> `ItemCard` (category badge + meta pills + swipe done/dismiss with haptics + one-shot staggered
+> entrance; `interactive:false` for the calendar), `SectionHeader`, `FilterChipBar` (animated select),
+> `EmptyState`/`ErrorState`/`LoadingState`, `SyncProgressCard`. Agenda & Calendar rewired onto them;
+> calendar gained category-colored day dots + warm animated cells + a dense day list. **Documented
+> fast-follow (out of scope):** per-screen polish for sign-in/item-detail/settings (they inherit the
+> theme now), dark theme, launcher-icon rebrand. Foundation `108e4f5..881dd89`; components+screens+motion
+> `881dd89..c5095ca`. **USER: on-device eyeball pending** (`flutter run` + `--dart-define=SHOW_ADS=true`
+> to confirm the coral theme, category dots, staggered entrance, swipe+haptics, and that the ad slot
+> still lays out below content).
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
