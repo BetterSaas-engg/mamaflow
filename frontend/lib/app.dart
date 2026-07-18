@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'auth/session_controller.dart';
+import 'theme/app_theme.dart';
 import 'ui/home_shell.dart';
 import 'ui/sign_in_screen.dart';
 
@@ -33,6 +34,9 @@ class MamaflowApp extends ConsumerWidget {
     });
     return MaterialApp.router(
       title: 'Mamaflow',
+      theme: buildLightTheme(),
+      // Light-only for now; system dark must not render a half-built dark theme.
+      themeMode: ThemeMode.light,
       routerConfig: _router,
     );
   }
