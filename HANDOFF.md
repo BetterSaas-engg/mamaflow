@@ -258,6 +258,13 @@
 > (on requirements.txt change + weekly). Nits still queued: `msg["id"]` direct indexing in
 > gmail_reader (whole-batch failure vs per-message isolation), delete `blocked_domains.json`
 > (already in hygiene queue); DB CHECK on `items.event_type` deliberately skipped (D34).
+> **PR #12 opened** (28 commits: ad prototype + redesign + branding + audit fixes; no new
+> migrations). **Full CI added** (`.github/workflows/ci.yml`): on PRs + main pushes — backend
+> pytest (Python 3.14 + en_core_web_lg, mirroring the Railway Dockerfile; settings need no .env,
+> verified), flutter analyze+test (3.44.3), and the firewall guard run server-side (hooks only
+> cover machines that installed them). **USER (GitHub/Railway settings, not code):** mark the
+> three CI jobs required checks with branch protection on `main`, and enable Railway's
+> "Wait for CI" so a red `main` never deploys.
 
 | Track | What | Gate / status |
 |-------|------|---------------|
