@@ -1,9 +1,15 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
 import 'device_registrar.dart';
+
+/// 'ios' | 'android' for the device registration row. Top-level so it is
+/// testable without Firebase.
+String platformLabel() =>
+    defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
 
 /// Owns the app's FCM lifecycle for reminder push (D22/D27): asks for
 /// notification permission, obtains the device token, registers it with the
@@ -32,6 +38,9 @@ class PushService {
   /// mounts. A failed attempt retries on the next app start (a fresh instance)
   /// or after [stop] (a new session, possibly a different account).
   Future<void> start() async {
+    // Web ships without push (spec 2026-07-18): no FCM-web service worker.
+    // Reminders keep arriving on the phone.
+    if (kIsWeb) return;
     if (_started) return;
     _started = true;
 
@@ -86,7 +95,7 @@ class PushService {
     try {
       await _registrar.register(
         fcmToken: token,
-        platform: Platform.isIOS ? 'ios' : 'android',
+        platform: platformLabel(),
       );
     } catch (_) {
       // Best-effort: retried on the next token refresh or app start.

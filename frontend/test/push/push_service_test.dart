@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mamaflow/push/device_registrar.dart';
 import 'package:mamaflow/push/push_service.dart';
@@ -120,5 +121,15 @@ void main() {
     await service.start();
 
     await expectLater(service.stop(), completes);
+  });
+
+  test('platform string uses defaultTargetPlatform, not dart:io', () {
+    // Compile-time guard: importing dart:io breaks `flutter build web`.
+    // This test just pins the import change; the real check is Step 6's build.
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    expect(platformLabel(), 'ios');
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    expect(platformLabel(), 'android');
   });
 }

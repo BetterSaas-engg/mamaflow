@@ -38,6 +38,17 @@ class MamaflowApp extends ConsumerWidget {
       theme: buildLightTheme(),
       // Light-only for now; system dark must not render a half-built dark theme.
       themeMode: ThemeMode.light,
+      // Desktop/web: phone-designed screens stay readable in a centered column
+      // (~phone width). No-op on phones, whose width is already below the cap.
+      builder: (context, child) => ColoredBox(
+        color: Theme.of(context).colorScheme.surface,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: child ?? const SizedBox.shrink(),
+          ),
+        ),
+      ),
       routerConfig: _router,
     );
   }
