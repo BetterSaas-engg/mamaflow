@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — Mamaflow</title>
+  <meta name="theme-color" content="#F27E63">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="assets/logo.png">
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <img src="assets/logo.png" alt="Mamaflow logo">
+      <h1>Privacy Policy</h1>
+    </header>
+    <p><em>Last updated: 2026-07-10. Status: DRAFT for Google OAuth verification. Replace bracketed placeholders and host at a public URL (e.g. https://mamaflow.app/privacy or the Railway domain) before submitting for verification.</em></p>
+    <p>Mamaflow ("we", "our") helps parents turn family-related emails into a calendar and to-do list. This policy explains what data we access, what we do with it, and — just as importantly — what we never do with it.</p>
+    <h2>The short version</h2>
+    <ul>
+      <li>We read your Gmail <strong>only</strong> to find family events and tasks (school, medical, activities).</li>
+      <li>We <strong>never store your emails</strong>. Only the structured event we extract (title, date, time, location, child's first name as written, event type) is saved.</li>
+      <li>Your email content is <strong>never used for advertising</strong> — not directly, not summarized, not inferred. This is a structural guarantee, not a promise.</li>
+      <li>You can disconnect Gmail and delete your data at any time.</li>
+    </ul>
+    <h2>What we access</h2>
+    <p>With your explicit consent, Mamaflow requests <strong>read-only</strong> access to your Gmail (<code>gmail.readonly</code>). We also receive your email address and basic profile from Google Sign-In to create your account.</p>
+    <h2>How the processing works</h2>
+    <ol>
+      <li>We first read only message <strong>headers</strong> (sender, subject, date). Senders on our financial/promotional blocklist are excluded <strong>before their message content is ever fetched</strong>.</li>
+      <li>For remaining messages, the content is processed <strong>in memory</strong> to remove sensitive numbers (credit cards, bank accounts, government IDs) before any further processing.</li>
+      <li>The redacted text is sent to Anthropic's Claude API solely to extract structured event data (Anthropic does not train on this data per their commercial API terms).</li>
+      <li>Only the structured result is stored: event title, date, time, location, child name as written, event category, sender address, and a link back to the email in your own Gmail.</li>
+    </ol>
+    <h2>What we never do</h2>
+    <ul>
+      <li><strong>Never store raw email bodies</strong> — they are processed in memory and discarded.</li>
+      <li><strong>Never use email content (or anything derived from it) for advertising or ad targeting.</strong> If Mamaflow shows ads, they are non-personalized or targeted only on non-content signals (e.g. app screen, coarse location) — never on anything from your inbox.</li>
+      <li><strong>Never sell your data</strong> or share it with data brokers.</li>
+      <li><strong>Never keep your Google tokens on your device or in our application database</strong> — they are held server-side in a secrets vault.</li>
+    </ul>
+    <h2>Limited Use disclosure (Google API Services)</h2>
+    <p>Mamaflow's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the <strong>Limited Use</strong> requirements. Specifically: Gmail data is used only to provide the user-facing calendar/to-do feature the user requested; it is not used for advertising; it is not sold; humans do not read it except with your explicit consent, for security purposes, or to comply with law; and transfers are limited to the processing described above (Anthropic as a data processor for extraction).</p>
+    <h2>Data retention &amp; deletion</h2>
+    <ul>
+      <li>Extracted items are retained until you delete them or your account.</li>
+      <li>Account deletion soft-deletes then purges your data within [30] days.</li>
+      <li>Disconnecting Gmail (in Mamaflow or at https://myaccount.google.com/permissions) immediately stops all processing; you may separately request deletion of extracted items.</li>
+    </ul>
+    <h2>Sub-processors</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Google (Gmail API, Sign-In)</td>
+          <td>mailbox access you authorize; authentication</td>
+        </tr>
+        <tr>
+          <td>Anthropic (Claude API)</td>
+          <td>event extraction from redacted text (no training on data)</td>
+        </tr>
+        <tr>
+          <td>Railway (hosting) + PostgreSQL</td>
+          <td>application hosting and storage of structured items</td>
+        </tr>
+        <tr>
+          <td>Google Cloud Secret Manager</td>
+          <td>server-side storage of OAuth tokens</td>
+        </tr>
+        <tr>
+          <td>Google Firebase Cloud Messaging (FCM/APNs)</td>
+          <td>delivery of reminder notifications; notification text contains the titles/times of your extracted items (e.g. an event name), transmitted only to your registered devices — never used for advertising</td>
+        </tr>
+      </tbody>
+    </table>
+    <h2>Contact</h2>
+    <p>[Contact email — e.g. privacy@optimacore.io]</p>
+    <h2>Changes</h2>
+    <p>We will post any changes here and update the date above. Material changes will be announced in the app.</p>
+  </main>
+  <footer><p><a href="index.html">&larr; Mamaflow home</a></p></footer>
+</body>
+</html>
