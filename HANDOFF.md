@@ -266,6 +266,18 @@
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
 
+> **Update 2026-07-18 — Website + web app built (D35), branch `feat/website-web-app`.**
+> Static landing site (`website/`) ready to deploy — no domain needed yet, Vercel gives a free
+> `.vercel.app` URL. Backend: `POST /api/v1/auth/google/web` + `WEB_APP_ORIGINS` CORS +
+> `WEB_TOKEN_EXPIRE_MINUTES` (7-day web session TTL, D35) live in code. Frontend: Flutter web
+> target builds clean (`BrowserPkceCodes`, dart-define `GOOGLE_WEB_CLIENT_ID`), push is a no-op
+> on web, ad stubs keep the web build ad-free/firewall-clean. CI now runs `flutter build web`.
+> **USER steps (not code):** (1) create the two Vercel projects (landing + web app) per
+> `docs/website-deploy.md`; (2) add the localhost + deployed `auth.html` redirect URIs to the
+> WEB OAuth client in the Google console. Browser smoke-run of sign-in is deferred to USER —
+> it needs the console redirect URI from step 2 first. Domain-arrival checklist lives in
+> `docs/website-deploy.md`.
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
