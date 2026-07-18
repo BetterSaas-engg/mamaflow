@@ -228,6 +228,17 @@
 > to confirm the coral theme, category dots, staggered entrance, swipe+haptics, and that the ad slot
 > still lays out below content).
 
+> **Update 2026-07-17 — Branding: logo + landing/sign-in + splash + launcher icon.** Plan
+> `docs/superpowers/plans/2026-07-17-branding-logo-landing-splash.md`, spec
+> `docs/superpowers/specs/2026-07-17-branding-logo-landing-splash-design.md`. The heart-in-bubble
+> `AppLogo` (vector) now brands: the redesigned sign-in/landing (logo + Fredoka wordmark + three
+> trust lines + in-button loading), an in-app hydrate splash (`BrandSplash`), the native launch
+> screen (coral + logo, iOS + Android 12), and the launcher icon (iOS + Android adaptive) — killing
+> the default Flutter icon/splash before the tester distribution. Master PNGs are generated from the
+> same painter (`tool/generate_brand_assets.dart`) so nothing drifts. Presentation/config only;
+> firewall untouched; sign-in test invariants preserved. **USER: rebuild on device to see the new
+> icon/splash** (native assets only appear on a fresh install/run).
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
