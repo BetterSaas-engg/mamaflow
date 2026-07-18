@@ -38,4 +38,25 @@ void main() {
 
     expect(find.text('Soccer'), findsOneWidget);
   });
+
+  testWidgets('a tapped day\'s items are non-interactive (no swipe/menu)',
+      (tester) async {
+    final now = DateTime.now();
+    final iso =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final svc = _MockService();
+    when(() => svc.list(status: any(named: 'status')))
+        .thenAnswer((_) async => [_item('Soccer', date: iso)]);
+
+    await tester.pumpWidget(_host(svc));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('${now.day}').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Soccer'), findsOneWidget);
+    // interactive:false in the calendar day list — no status menu, no swipe.
+    expect(find.byType(PopupMenuButton<String>), findsNothing);
+    expect(find.byType(Dismissible), findsNothing);
+  });
 }

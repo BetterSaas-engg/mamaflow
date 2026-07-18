@@ -30,6 +30,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _completed = false;
   SyncStatus? _syncStatus; // non-null while a sync is in flight
 
+  // Stable first-seen rank per item id, so the staggered entrance delay (and
+  // thus flutter_animate's total duration) never changes for an already-visible
+  // card. Keying the stagger to the live list index instead made a filter tap
+  // or "show completed" toggle restart every settled card's fade — a flicker.
+  final Map<String, int> _entranceRank = {};
+  int _rankFor(String id) => _entranceRank.putIfAbsent(id, () => _entranceRank.length);
+
   @override
   Widget build(BuildContext context) {
     final items = ref.watch(itemsProvider);
@@ -87,7 +94,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final children = childValues(all);
     final types = typeValues(all);
 
-    var running = 0; // continuous index across sections, for the entrance stagger
     return CustomScrollView(
       slivers: [
         if (children.isNotEmpty || types.isNotEmpty)
@@ -126,7 +132,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 return Padding(
                   key: ValueKey(item.id),
                   padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                  child: _entrance(running++, ItemCard(item: item)),
+                  child: _entrance(_rankFor(item.id), ItemCard(item: item)),
                 );
               },
             ),

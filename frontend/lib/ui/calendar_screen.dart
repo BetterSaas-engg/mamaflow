@@ -92,72 +92,72 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     final selectedItems =
         _selected == null ? const <Item>[] : (byDate[_iso(_selected!)] ?? const <Item>[]);
 
-    return Column(
-      children: [
-        const _WeekdayHeader(),
-        Padding(
+    // The whole calendar (grid + day list) is one scroll view. Rows use a
+    // fixed height (mainAxisExtent) rather than an aspect ratio, so cell height
+    // never grows with screen width — the earlier Column+aspect-ratio layout
+    // overflowed in landscape / short viewports and collapsed the day list.
+    return CustomScrollView(
+      slivers: [
+        const SliverToBoxAdapter(child: _WeekdayHeader()),
+        SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-          child: GridView.count(
-            crossAxisCount: 7,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            // Keep rows short enough that the month grid + day list fit the
-            // Column without overflowing (cells hold a number + up to 3 dots).
-            childAspectRatio: 1.8,
-            children: [
-              for (final cell in cells)
-                if (cell == null)
-                  const SizedBox.shrink()
-                else
-                  _DayCell(
-                    day: cell.day,
-                    isToday: _sameDay(cell, today),
-                    isSelected: _selected != null && _sameDay(cell, _selected!),
-                    items: byDate[_iso(cell)] ?? const <Item>[],
-                    onTap: () => setState(() => _selected = cell),
-                  ),
-            ],
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 7,
+              mainAxisExtent: 52,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final cell = cells[i];
+                if (cell == null) return const SizedBox.shrink();
+                return _DayCell(
+                  day: cell.day,
+                  isToday: _sameDay(cell, today),
+                  isSelected: _selected != null && _sameDay(cell, _selected!),
+                  items: byDate[_iso(cell)] ?? const <Item>[],
+                  onTap: () => setState(() => _selected = cell),
+                );
+              },
+              childCount: cells.length,
+            ),
           ),
         ),
-        const Divider(),
-        Expanded(child: _dayList(selectedItems)),
-      ],
-    );
-  }
-
-  Widget _dayList(List<Item> selectedItems) {
-    if (_selected == null) {
-      return const SizedBox.shrink();
-    }
-    // One scroll view for the header + day items (or the empty state), so a
-    // tight remaining height just scrolls instead of overflowing the Column.
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(
-          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xxl),
-      children: [
-        Text(
-          _dayHeading(_selected!),
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: AppSpacing.sm),
+        const SliverToBoxAdapter(child: Divider()),
+        if (_selected != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.sm),
+              child: Text(_dayHeading(_selected!),
+                  style: Theme.of(context).textTheme.titleSmall),
+            ),
+          ),
         if (selectedItems.isEmpty)
-          const EmptyState(
-            icon: Icons.event_available_outlined,
-            title: 'Nothing planned',
-            message: 'No items on this day.',
-            compact: true,
+          const SliverToBoxAdapter(
+            child: EmptyState(
+              icon: Icons.event_available_outlined,
+              title: 'Nothing planned',
+              message: 'No items on this day.',
+              compact: true,
+            ),
           )
         else
-          for (final item in selectedItems)
-            Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-              child: ItemCard(
-                item: item,
-                dense: true,
-                showDate: false,
-                interactive: false,
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.xxl),
+            sliver: SliverList.builder(
+              itemCount: selectedItems.length,
+              itemBuilder: (context, i) => Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: ItemCard(
+                  item: selectedItems[i],
+                  dense: true,
+                  showDate: false,
+                  interactive: false,
+                ),
               ),
             ),
+          ),
       ],
     );
   }
@@ -206,16 +206,19 @@ class _DayCell extends StatelessWidget {
     final dots = [
       for (final item in items.take(3)) categoryColor(item.eventType),
     ];
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: AppDurations.fast,
-        curve: AppCurves.standard,
-        margin: const EdgeInsets.all(AppSpacing.xs),
-        decoration: BoxDecoration(
-          color: isSelected ? scheme.primaryContainer : Colors.transparent,
-          borderRadius: BorderRadius.circular(AppRadii.md),
-        ),
+    // InkWell (not a bare GestureDetector) for a ripple + button semantics,
+    // consistent with the rest of the redesign's tappable surfaces.
+    return AnimatedContainer(
+      duration: AppDurations.fast,
+      curve: AppCurves.standard,
+      margin: const EdgeInsets.all(AppSpacing.xs),
+      decoration: BoxDecoration(
+        color: isSelected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadii.md),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadii.md),
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Column(

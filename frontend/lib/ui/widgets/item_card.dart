@@ -136,7 +136,10 @@ class ItemCard extends ConsumerWidget {
     if (!interactive) return const SizedBox.shrink();
     return PopupMenuButton<String>(
       icon: Icon(Icons.more_vert, color: scheme.onSurfaceVariant),
-      onSelected: (status) => _setStatus(context, ref, status),
+      onSelected: (status) {
+        HapticFeedback.selectionClick();
+        _setStatus(context, ref, status);
+      },
       itemBuilder: (context) => const [
         PopupMenuItem(value: 'done', child: Text('Mark done')),
         PopupMenuItem(value: 'dismissed', child: Text('Dismiss')),
@@ -154,10 +157,11 @@ class ItemCard extends ConsumerWidget {
         child: Icon(icon, color: color),
       );
 
+  // Haptics fire at the call sites (mediumImpact on swipe, selectionClick on
+  // the menu) so a single gesture never double-buzzes.
   Future<void> _setStatus(BuildContext context, WidgetRef ref, String status) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      HapticFeedback.selectionClick();
       await ref.read(itemsProvider.notifier).setStatus(item.id, status);
     } catch (_) {
       messenger.showSnackBar(
@@ -191,6 +195,7 @@ class _MetaChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.hair),
@@ -198,11 +203,13 @@ class _MetaChip extends StatelessWidget {
         color: accent.withValues(alpha: .10),
         borderRadius: BorderRadius.circular(AppRadii.pill),
       ),
+      // Mostly the readable muted foreground, lightly tinted toward the accent
+      // — keeps AA contrast on the near-white card for pale categories (amber,
+      // lavender) instead of near-invisible accent-on-white text.
       child: Text(
         label,
         style: text.labelSmall?.copyWith(
-          color: Color.alphaBlend(accent.withValues(alpha: .9),
-              Theme.of(context).colorScheme.onSurface),
+          color: Color.alphaBlend(accent.withValues(alpha: .30), scheme.onSurfaceVariant),
         ),
       ),
     );
