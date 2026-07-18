@@ -4,21 +4,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../calendar/calendar_math.dart';
 import '../items/item.dart';
 import '../items/items_controller.dart';
-import 'item_detail_screen.dart';
+import '../theme/category_colors.dart';
+import '../theme/tokens.dart';
+import 'widgets/item_card.dart';
+import 'widgets/states.dart';
 
 const _monthNames = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
+const _weekdayNames = [
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+];
+
 String _iso(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+String _dayHeading(DateTime d) =>
+    '${_weekdayNames[d.weekday - 1]}, ${_monthNames[d.month - 1]} ${d.day}';
 
 bool _sameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
 
-/// Month calendar over the loaded items: dots on days with items, tap a day to
-/// list its items. Dateless to-dos stay in the Agenda tab.
+/// Month calendar over the loaded items: category-colored dots on days with
+/// items, tap a day to list its items. Dateless to-dos stay in the Agenda tab.
 class CalendarScreen extends ConsumerStatefulWidget {
   const CalendarScreen({super.key});
   @override
@@ -85,35 +95,69 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     return Column(
       children: [
         const _WeekdayHeader(),
-        GridView.count(
-          crossAxisCount: 7,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          childAspectRatio: 2,
-          children: [
-            for (final cell in cells)
-              if (cell == null)
-                const SizedBox.shrink()
-              else
-                _DayCell(
-                  day: cell.day,
-                  isToday: _sameDay(cell, today),
-                  isSelected: _selected != null && _sameDay(cell, _selected!),
-                  hasItems: byDate.containsKey(_iso(cell)),
-                  onTap: () => setState(() => _selected = cell),
-                ),
-          ],
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+          child: GridView.count(
+            crossAxisCount: 7,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            // Keep rows short enough that the month grid + day list fit the
+            // Column without overflowing (cells hold a number + up to 3 dots).
+            childAspectRatio: 1.8,
+            children: [
+              for (final cell in cells)
+                if (cell == null)
+                  const SizedBox.shrink()
+                else
+                  _DayCell(
+                    day: cell.day,
+                    isToday: _sameDay(cell, today),
+                    isSelected: _selected != null && _sameDay(cell, _selected!),
+                    items: byDate[_iso(cell)] ?? const <Item>[],
+                    onTap: () => setState(() => _selected = cell),
+                  ),
+            ],
+          ),
         ),
-        const Divider(height: 1),
-        Expanded(
-          child: selectedItems.isEmpty
-              ? const Center(child: Text('No items on this day.'))
-              : ListView.separated(
-                  itemCount: selectedItems.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) => _DayItemTile(item: selectedItems[i]),
-                ),
+        const Divider(),
+        Expanded(child: _dayList(selectedItems)),
+      ],
+    );
+  }
+
+  Widget _dayList(List<Item> selectedItems) {
+    if (_selected == null) {
+      return const SizedBox.shrink();
+    }
+    // One scroll view for the header + day items (or the empty state), so a
+    // tight remaining height just scrolls instead of overflowing the Column.
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xxl),
+      children: [
+        Text(
+          _dayHeading(_selected!),
+          style: Theme.of(context).textTheme.titleSmall,
         ),
+        const SizedBox(height: AppSpacing.sm),
+        if (selectedItems.isEmpty)
+          const EmptyState(
+            icon: Icons.event_available_outlined,
+            title: 'Nothing planned',
+            message: 'No items on this day.',
+            compact: true,
+          )
+        else
+          for (final item in selectedItems)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: ItemCard(
+                item: item,
+                dense: true,
+                showDate: false,
+                interactive: false,
+              ),
+            ),
       ],
     );
   }
@@ -122,19 +166,23 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
 class _WeekdayHeader extends StatelessWidget {
   const _WeekdayHeader();
   @override
-  Widget build(BuildContext context) => Row(
-        children: [
-          for (final d in const ['S', 'M', 'T', 'W', 'T', 'F', 'S'])
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Text(d,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Row(
+      children: [
+        for (final d in const ['S', 'M', 'T', 'W', 'T', 'F', 'S'])
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+              child: Text(d,
+                  textAlign: TextAlign.center,
+                  style: text.labelMedium?.copyWith(color: scheme.onSurfaceVariant)),
             ),
-        ],
-      );
+          ),
+      ],
+    );
+  }
 }
 
 class _DayCell extends StatelessWidget {
@@ -142,69 +190,75 @@ class _DayCell extends StatelessWidget {
     required this.day,
     required this.isToday,
     required this.isSelected,
-    required this.hasItems,
+    required this.items,
     required this.onTap,
   });
   final int day;
   final bool isToday;
   final bool isSelected;
-  final bool hasItems;
+  final List<Item> items;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
+    // Up to three category-colored dots for the day's items.
+    final dots = [
+      for (final item in items.take(3)) categoryColor(item.eventType),
+    ];
+    return GestureDetector(
       onTap: onTap,
-      child: Container(
+      child: AnimatedContainer(
+        duration: AppDurations.fast,
+        curve: AppCurves.standard,
+        margin: const EdgeInsets.all(AppSpacing.xs),
         decoration: BoxDecoration(
-          color: isSelected ? scheme.primaryContainer : null,
-          border: isToday ? Border.all(color: scheme.primary) : null,
-          borderRadius: BorderRadius.circular(8),
+          color: isSelected ? scheme.primaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadii.md),
         ),
-        margin: const EdgeInsets.all(2),
-        // FittedBox: on dense screens the fixed content (text + dot) can be a
-        // hair taller than the aspect-ratio cell — scale down, never overflow.
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('$day'),
-              const SizedBox(height: 2),
               Container(
-                width: 6,
-                height: 6,
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: hasItems ? scheme.primary : Colors.transparent,
+                  border: isToday
+                      ? Border.all(color: scheme.primary, width: 2)
+                      : null,
+                ),
+                child: Text('$day',
+                    style: TextStyle(
+                      fontWeight:
+                          isToday || isSelected ? FontWeight.w700 : FontWeight.w500,
+                      color: isSelected
+                          ? scheme.onPrimaryContainer
+                          : scheme.onSurface,
+                    )),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              SizedBox(
+                height: 6,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final c in dots)
+                      Container(
+                        width: 5,
+                        height: 5,
+                        margin: const EdgeInsets.symmetric(horizontal: 1),
+                        decoration: BoxDecoration(shape: BoxShape.circle, color: c),
+                      ),
+                  ],
                 ),
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _DayItemTile extends StatelessWidget {
-  const _DayItemTile({required this.item});
-  final Item item;
-
-  @override
-  Widget build(BuildContext context) {
-    final subtitle = <String>[
-      if (item.time != null) item.time!,
-      if (item.eventType != null) item.eventType!,
-      if (item.childName != null) item.childName!,
-    ].join('  ·  ');
-    return ListTile(
-      leading: Icon(item.isEvent ? Icons.event : Icons.check_circle_outline),
-      title: Text(item.title),
-      subtitle: subtitle.isEmpty ? null : Text(subtitle),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ItemDetailScreen(item: item)),
       ),
     );
   }
