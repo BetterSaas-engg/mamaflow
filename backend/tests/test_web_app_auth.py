@@ -32,6 +32,33 @@ def test_web_redirect_uri_unconfigured_raises(monkeypatch):
         oauth.web_redirect_uri()
 
 
+def test_web_redirect_uri_with_matching_origin_uses_that_origin(monkeypatch):
+    """The frontend may run on any configured origin, not just the first — the
+    consent redirect_uri must match whichever origin actually started the
+    flow, or the token exchange fails after the user already granted consent."""
+    monkeypatch.setattr(
+        settings, "web_app_origins",
+        "https://first.example, https://second.example",
+    )
+    assert (
+        oauth.web_redirect_uri(origin="https://second.example")
+        == "https://second.example/auth.html"
+    )
+
+
+def test_web_redirect_uri_with_unlisted_origin_falls_back_to_first(monkeypatch):
+    """A client-supplied origin the server never configured must never be
+    trusted — fall back to the current (first-origin) behavior."""
+    monkeypatch.setattr(
+        settings, "web_app_origins",
+        "https://first.example, https://second.example",
+    )
+    assert (
+        oauth.web_redirect_uri(origin="https://evil.example")
+        == "https://first.example/auth.html"
+    )
+
+
 async def test_valid_code_returns_jwt_with_web_ttl(client, db, monkeypatch):
     async def _fake_exchange(code, code_verifier):
         assert code == "web-code-123" and code_verifier == "web-verifier-xyz"
@@ -76,6 +103,36 @@ async def test_web_auth_stores_token_off_the_event_loop(client, monkeypatch):
 
     assert resp.status_code == 200
     assert store_threads and store_threads[0] != threading.get_ident()
+
+
+async def test_endpoint_passes_origin_header_through_to_exchange(client, monkeypatch):
+    """The endpoint must forward the browser's own Origin header so the
+    consent redirect_uri (built client-side from that same origin) matches
+    the redirect_uri used in the token exchange — otherwise any configured
+    origin other than origins[0] passes CORS, completes consent, then fails
+    the exchange. Validation against the configured origin list happens
+    inside web_redirect_uri/exchange_code_web (covered above); this test only
+    confirms the endpoint plumbs the header value through."""
+    monkeypatch.setattr(
+        settings, "web_app_origins",
+        "https://first.example, https://second.example",
+    )
+    recorded = {}
+
+    async def _fake_exchange(code, code_verifier, origin=None):
+        recorded["origin"] = origin
+        return FAKE_CREDS, "parent@example.com"
+
+    monkeypatch.setattr(oauth, "exchange_code_web", _fake_exchange)
+
+    resp = await client.post(
+        "/api/v1/auth/google/web",
+        json=BODY,
+        headers={"Origin": "https://second.example"},
+    )
+
+    assert resp.status_code == 200
+    assert recorded["origin"] == "https://second.example"
 
 
 async def test_invalid_code_returns_400_sanitized(client, monkeypatch):
