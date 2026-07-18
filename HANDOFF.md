@@ -277,6 +277,14 @@
 > WEB OAuth client in the Google console. Browser smoke-run of sign-in is deferred to USER —
 > it needs the console redirect URI from step 2 first. Domain-arrival checklist lives in
 > `docs/website-deploy.md`.
+> **Accepted risk (explicit):** the browser sign-in flow (auth.html postMessage/localStorage
+> handoff → `POST /auth/google/web` → app JWT) has **NOT been exercised end-to-end in a real
+> browser** — it is unit-tested only, against fakes (mocked `exchange_code_web`,
+> `httpx.AsyncClient`, `google.oauth2.id_token`), never a live Google consent screen or an
+> actual `window.opener`/COOP-severed popup. First real verification happens at the **USER
+> smoke-run** (after the Google console redirect URI is added, per step 2 above) — until then,
+> failure modes specific to real browsers (COOP popup-opener severance, third-party storage
+> partitioning, actual redirect_uri mismatches) are unverified in practice, only reasoned about.
 
 | Track | What | Gate / status |
 |-------|------|---------------|

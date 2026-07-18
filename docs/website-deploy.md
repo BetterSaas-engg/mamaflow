@@ -1,5 +1,13 @@
 # Website + web app deploy (spec 2026-07-18)
 
+## Local dev
+Run the web app on a **fixed port** so it stays stable across `flutter run`
+invocations: `flutter run -d chrome --web-port 5111`. That lets
+`WEB_APP_ORIGINS=http://localhost:5111` (backend `.env`) and the Google
+console's WEB OAuth client redirect URI `http://localhost:5111/auth.html`
+stay put run to run — an unpinned/random port would otherwise drift and break
+both.
+
 ## Vercel projects (no domain needed)
 1. **Landing:** New Project → import this repo → Root Directory `website/` →
    Framework "Other", no build command, output dir `.` → deploy.
