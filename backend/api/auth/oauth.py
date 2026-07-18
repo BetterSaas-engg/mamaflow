@@ -103,7 +103,9 @@ async def google_callback(request: Request):
     credentials = flow.credentials
     user_email = id_info["email"]
 
-    store_token(user_email, {
+    # store_token is a blocking gRPC call on the secret-manager backend —
+    # off the loop, like the Google calls above.
+    await asyncio.to_thread(store_token, user_email, {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": credentials.token_uri,
@@ -237,7 +239,8 @@ async def google_mobile_auth(
 
     user = await get_or_create_user(db, email)
     # Token store keyed by the user's normalized email so Gmail lookups align.
-    store_token(user.email, creds_data)
+    # Blocking gRPC on the secret-manager backend — off the loop.
+    await asyncio.to_thread(store_token, user.email, creds_data)
 
     token = create_access_token(subject=str(user.id), email=user.email)
 

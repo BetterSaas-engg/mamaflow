@@ -100,7 +100,11 @@ async def run_sync_job(
                 # (2026-07-15: an invalid tool schema 400'd every extraction
                 # and each sync died on its first message.)
                 try:
-                    redaction = redact_pii(bodies.get(msg["message_id"], ""))
+                    # Presidio is CPU-bound spaCy analysis — off the loop, or
+                    # every concurrent request stalls for the whole sync.
+                    redaction = await asyncio.to_thread(
+                        redact_pii, bodies.get(msg["message_id"], "")
+                    )
                     extraction = await asyncio.to_thread(
                         extract_events,
                         redaction.redacted_text,

@@ -54,6 +54,38 @@ async def test_callback_happy_path_stores_gmail_token(client, monkeypatch):
     assert stored["refresh_token"] == "r"
 
 
+async def test_callback_stores_token_off_the_event_loop(client, monkeypatch):
+    """With the secret-manager backend, store_token is a blocking gRPC call —
+    it must not run on the event loop in the sign-in hot path."""
+    import threading
+
+    creds = SimpleNamespace(
+        token="t", refresh_token="r", token_uri="u", client_id="c",
+        client_secret="s", scopes=["scope"], id_token="idtok",
+    )
+    flow = SimpleNamespace(
+        credentials=creds, code_verifier=None, fetch_token=lambda code: None
+    )
+    monkeypatch.setattr(oauth, "_build_flow", lambda: flow)
+    monkeypatch.setattr(
+        "google.oauth2.id_token.verify_oauth2_token",
+        lambda *a, **k: {"email": "web-offloop@example.com"},
+    )
+    oauth._pending_states["st-offloop"] = "verifier"
+
+    store_threads = []
+    monkeypatch.setattr(
+        oauth, "store_token",
+        lambda email, data: store_threads.append(threading.get_ident()),
+    )
+
+    resp = await client.get("/api/v1/auth/google/callback?state=st-offloop&code=abc")
+
+    assert resp.status_code == 200
+    assert store_threads, "store_token was never called"
+    assert store_threads[0] != threading.get_ident()
+
+
 async def test_callback_google_failure_returns_400_not_500(client, monkeypatch):
     def _boom(code):
         raise ValueError("google exploded")

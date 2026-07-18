@@ -239,6 +239,23 @@
 > firewall untouched; sign-in test invariants preserved. **USER: rebuild on device to see the new
 > icon/splash** (native assets only appear on a fresh install/run).
 
+> **Update 2026-07-18 — Full backend maintainability audit (code-maintainability-audit skill) +
+> event-loop fix batch.** Three parallel audits (async/parsing, Pydantic/UUID-UTC/soft-delete,
+> secrets/deps/errors) over `backend/api/`. Clean: IDs & time, soft delete, secrets (env 1:1 with
+> `.env.example`, tokens never in DB/logs, nothing in git history), deps (all used, pinned),
+> error hygiene (types-only logging holds everywhere), defensive parsing (extractor/gmail/token/FCM).
+> **Fixed same day (TDD, security-audited PASS, 167 backend tests):** all four blocking-call
+> findings wrapped in `asyncio.to_thread` — `redact_pii` in the sync loop (must-fix: Presidio is
+> CPU-bound; stalled every concurrent request during a sync), `token_store.get/delete_token` in
+> `delete_account`, and `store_token` in both OAuth handlers (blocking Secret Manager gRPC in the
+> sign-in hot path). Four regression tests assert these run off the loop thread.
+> **Remaining should-fix (not done):** `FamilyItem.event_type` is `str|None`, not `Literal` — since
+> the 2026-07-15 `anyOf` fix removed the strict-schema enum coupling, no layer (Pydantic or DB CHECK)
+> enforces the vocabulary; `?type=` on GET /items not `Literal` (typo → empty 200, not 422);
+> `google_callback` returns a raw dict (no response schema); no `pip-audit` in CI. Nits queued:
+> `msg["id"]` direct indexing in gmail_reader (whole-batch failure vs per-message isolation),
+> `ItemRead.item_type/status` not `Literal`, delete `blocked_domains.json` (already in hygiene queue).
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
