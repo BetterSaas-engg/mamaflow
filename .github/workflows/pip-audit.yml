@@ -25,4 +25,4 @@ jobs:
       - name: Audit backend dependencies
         uses: pypa/gh-action-pip-audit@v1.1.0
         with:
-          inputs: -r backend/requirements.txt
+          inputs: backend/requirements.txt
