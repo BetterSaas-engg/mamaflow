@@ -249,12 +249,15 @@
 > CPU-bound; stalled every concurrent request during a sync), `token_store.get/delete_token` in
 > `delete_account`, and `store_token` in both OAuth handlers (blocking Secret Manager gRPC in the
 > sign-in hot path). Four regression tests assert these run off the loop thread.
-> **Remaining should-fix (not done):** `FamilyItem.event_type` is `str|None`, not `Literal` — since
-> the 2026-07-15 `anyOf` fix removed the strict-schema enum coupling, no layer (Pydantic or DB CHECK)
-> enforces the vocabulary; `?type=` on GET /items not `Literal` (typo → empty 200, not 422);
-> `google_callback` returns a raw dict (no response schema); no `pip-audit` in CI. Nits queued:
-> `msg["id"]` direct indexing in gmail_reader (whole-batch failure vs per-message isolation),
-> `ItemRead.item_type/status` not `Literal`, delete `blocked_domains.json` (already in hygiene queue).
+> **Should-fix batch DONE same day (TDD, security-audited PASS, 175 backend tests):**
+> `FamilyItem.event_type` now `Literal` of the 8-value vocabulary + a before-validator coercing
+> unknown values to `"other"` (never hard-fails — D34; wire schema in content_wrapper untouched,
+> anyOf quirk preserved); `?type=` on GET /items now `Literal` (typo → 422);
+> `ItemRead.item_type/status` now `Literal`; `google_callback` returns `WebCallbackResponse`
+> (same shape, now in OpenAPI); **first CI workflow added** — `.github/workflows/pip-audit.yml`
+> (on requirements.txt change + weekly). Nits still queued: `msg["id"]` direct indexing in
+> gmail_reader (whole-batch failure vs per-message isolation), delete `blocked_domains.json`
+> (already in hygiene queue); DB CHECK on `items.event_type` deliberately skipped (D34).
 
 | Track | What | Gate / status |
 |-------|------|---------------|

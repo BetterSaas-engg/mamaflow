@@ -51,6 +51,28 @@ async def test_get_items_filters_by_date_range(client, db):
     assert [i["event_title"] for i in resp.json()["items"]] == ["June"]
 
 
+async def test_get_items_rejects_unknown_type_filter(client, db):
+    """?type= is a closed vocabulary — a typo'd filter must 422 loudly, not
+    return an empty 200 that looks like 'no items' (2026-07-18 audit)."""
+    _, token = await _user_with_token(db)
+
+    resp = await client.get("/api/v1/items?type=bogus", headers=_auth(token))
+
+    assert resp.status_code == 422
+
+
+async def test_get_items_filters_by_valid_type(client, db):
+    user, token = await _user_with_token(db)
+    await persist_items(db, user, "m1", [
+        FamilyItem(item_type="event", event_title="Game", date="2026-06-20"),
+        FamilyItem(item_type="action", event_title="Register"),
+    ])
+
+    resp = await client.get("/api/v1/items?type=action", headers=_auth(token))
+
+    assert [i["event_title"] for i in resp.json()["items"]] == ["Register"]
+
+
 async def test_patch_updates_status(client, db):
     user, token = await _user_with_token(db)
     [item] = await persist_items(

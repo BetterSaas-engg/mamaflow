@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1/items", tags=["items"])
 async def get_items(
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None, alias="to"),
-    type: str | None = Query(None),
+    type: Literal["event", "action"] | None = Query(None),
     status: Literal["open", "done", "dismissed"] | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

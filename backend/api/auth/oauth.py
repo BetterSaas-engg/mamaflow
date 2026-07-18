@@ -62,7 +62,12 @@ async def google_login():
     return RedirectResponse(auth_url)
 
 
-@router.get("/google/callback")
+class WebCallbackResponse(BaseModel):
+    message: str
+    email: str
+
+
+@router.get("/google/callback", response_model=WebCallbackResponse)
 async def google_callback(request: Request):
     if request.query_params.get("error"):
         # The user denied consent (or Google reported an OAuth error code).
@@ -114,10 +119,7 @@ async def google_callback(request: Request):
         "scopes": list(credentials.scopes),
     })
 
-    return {
-        "message": "OAuth successful",
-        "email": user_email,
-    }
+    return WebCallbackResponse(message="OAuth successful", email=user_email)
 
 
 # --- Mobile auth (D23): OAuth 2.0 authorization-code + PKCE ---

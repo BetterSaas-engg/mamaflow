@@ -100,6 +100,20 @@ async def test_callback_google_failure_returns_400_not_500(client, monkeypatch):
     assert "exploded" not in resp.text  # sanitized
 
 
+def test_callback_response_has_a_schema_contract():
+    """The callback must declare a response_model (2026-07-18 audit): every
+    other auth endpoint has a typed contract; a raw dict lets the shape drift
+    with no OpenAPI diff."""
+    from api.main import app
+
+    spec = app.openapi()
+    schema = spec["paths"]["/api/v1/auth/google/callback"]["get"]["responses"][
+        "200"]["content"]["application/json"]["schema"]
+    if "$ref" in schema:
+        schema = spec["components"]["schemas"][schema["$ref"].rsplit("/", 1)[1]]
+    assert set(schema.get("properties", {})) == {"message", "email"}
+
+
 async def test_pending_states_are_capped(monkeypatch):
     """Abandoned logins must not grow the in-memory state dict forever."""
     monkeypatch.setattr(oauth, "_MAX_PENDING_STATES", 3)
