@@ -266,6 +266,18 @@
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
 
+> **Update 2026-07-22 — Domain + Apple Developer acquired.** USER purchased **themamaflow.com**
+> and enrolled in the **Apple Developer Program**. Landing CTA now points at
+> `https://app.themamaflow.com` (was `example.invalid`). Remaining USER steps for the domain
+> (per `docs/website-deploy.md` checklist): attach apex/www → landing Vercel project and
+> `app.` → web-app project; add `https://app.themamaflow.com/auth.html` to the WEB OAuth
+> client's redirect URIs; set Railway `WEB_APP_ORIGINS=https://app.themamaflow.com` (keep
+> localhost for dev, comma-separated). Apple next steps: accept agreements in App Store
+> Connect; register bundle id `com.bettersaas.mamaflow.mamaflow` (Push Notifications on);
+> create the APNs .p8 key and upload to the Firebase project (Track B gate); Xcode → team
+> signing + drag `GoogleService-Info.plist` into Runner; App Store Connect app record →
+> TestFlight. Distribution: TestFlight (iOS) + Firebase App Distribution (Android).
+
 > **Update 2026-07-18 — Website + web app built (D35), branch `feat/website-web-app`.**
 > Static landing site (`website/`) ready to deploy — no domain needed yet, Vercel gives a free
 > `.vercel.app` URL. Backend: `POST /api/v1/auth/google/web` + `WEB_APP_ORIGINS` CORS +
