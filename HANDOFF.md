@@ -72,6 +72,18 @@
 >   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
 >      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
 >      output hardening.
+>   4. **⚠️ COST BUG (found 2026-07-23, ~$10 CAD/day) — zero-event emails re-extracted every tick.**
+>      Dedup (`existing_message_ids`) keys off `Item.source_message_id`, so a message is "already
+>      synced" only if it produced ≥1 Item. Emails that pass the blocklist but extract **no** events
+>      (school newsletters, generic mail) never persist an Item → every hourly `auto_sync_tick`
+>      (CronTrigger minute=30, 24×/day) re-fetches the body and re-calls Claude on them, across the
+>      full `after:30d` / maxResults=50 window. For a test inbox this is dozens of emails × 24 =
+>      hundreds of needless `claude-sonnet-4-6` calls/day. **Fix:** record every processed
+>      `(user, message_id)` regardless of event count (processed-messages marker table, or a
+>      "synced-empty" sentinel row) so zero-event mail is never re-extracted. Secondary win: add
+>      prompt caching — the ~2K-token static schema+instructions prefix in `content_wrapper` is
+>      re-sent full-price on every call (no `cache_control`). Touches the extractor + persistence →
+>      needs `@security-auditor` before finishing.
 > - Branch `feat/backend-mobile-integration` pushed; **PR #1 open**
 >   (https://github.com/BetterSaas-engg/mamaflow/pull/1) — merge pending PM review.
 
