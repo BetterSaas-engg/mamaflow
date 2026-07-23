@@ -266,6 +266,38 @@
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
 
+> **Update 2026-07-22 — Domain + Apple Developer acquired.** USER purchased **themamaflow.com**
+> and enrolled in the **Apple Developer Program**. Landing CTA now points at
+> `https://app.themamaflow.com` (was `example.invalid`). Remaining USER steps for the domain
+> (per `docs/website-deploy.md` checklist): attach apex/www → landing Vercel project and
+> `app.` → web-app project; add `https://app.themamaflow.com/auth.html` to the WEB OAuth
+> client's redirect URIs; set Railway `WEB_APP_ORIGINS=https://app.themamaflow.com` (keep
+> localhost for dev, comma-separated). Apple next steps: accept agreements in App Store
+> Connect; register bundle id `com.bettersaas.mamaflow.mamaflow` (Push Notifications on);
+> create the APNs .p8 key and upload to the Firebase project (Track B gate); Xcode → team
+> signing + drag `GoogleService-Info.plist` into Runner; App Store Connect app record →
+> TestFlight. Distribution: TestFlight (iOS) + Firebase App Distribution (Android).
+
+> **Update 2026-07-18 — Website + web app built (D35), branch `feat/website-web-app`.**
+> Static landing site (`website/`) ready to deploy — no domain needed yet, Vercel gives a free
+> `.vercel.app` URL. Backend: `POST /api/v1/auth/google/web` + `WEB_APP_ORIGINS` CORS +
+> `WEB_TOKEN_EXPIRE_MINUTES` (7-day web session TTL, D35) live in code. Frontend: Flutter web
+> target builds clean (`BrowserPkceCodes`, dart-define `GOOGLE_WEB_CLIENT_ID`), push is a no-op
+> on web, ad stubs keep the web build ad-free/firewall-clean. CI now runs `flutter build web`.
+> **USER steps (not code):** (1) create the two Vercel projects (landing + web app) per
+> `docs/website-deploy.md`; (2) add the localhost + deployed `auth.html` redirect URIs to the
+> WEB OAuth client in the Google console. Browser smoke-run of sign-in is deferred to USER —
+> it needs the console redirect URI from step 2 first. Domain-arrival checklist lives in
+> `docs/website-deploy.md`.
+> **Accepted risk (explicit):** the browser sign-in flow (auth.html postMessage/localStorage
+> handoff → `POST /auth/google/web` → app JWT) has **NOT been exercised end-to-end in a real
+> browser** — it is unit-tested only, against fakes (mocked `exchange_code_web`,
+> `httpx.AsyncClient`, `google.oauth2.id_token`), never a live Google consent screen or an
+> actual `window.opener`/COOP-severed popup. First real verification happens at the **USER
+> smoke-run** (after the Google console redirect URI is added, per step 2 above) — until then,
+> failure modes specific to real browsers (COOP popup-opener severance, third-party storage
+> partitioning, actual redirect_uri mismatches) are unverified in practice, only reasoned about.
+
 | Track | What | Gate / status |
 |-------|------|---------------|
 | A1 | Persistent Gmail tokens — **Secret Manager** (D4 forbids DB storage, even encrypted); in-memory stays the dev default | **Code DONE** (`cbbbe71`+`01a89ce`, audited PASS). **User-side BLOCKED**: the `optimacore.io` org enforces `iam.disableServiceAccountKeyCreation` (Secure-by-Default), so the service-account JSON key can't be created yet. **Plan:** deploy Railway with `TOKEN_STORE_BACKEND=memory` now (re-sign-in after each restart — acceptable in Testing); later an org admin (Sabiran/Akhil with `roles/orgpolicy.policyAdmin`, granted at the ORG level) creates a **project-scoped override** (Mamaflow project → IAM & Admin → Organization Policies → "Disable service account key creation" → Override parent → Enforcement Off), then creates the key (svc acct `mamaflow-backend`, role Secret Manager Admin) and flips the Railway vars (`TOKEN_STORE_BACKEND=secret-manager`, `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`). No code change needed. Keyless alternative if this drags: host backend in GCP (Cloud Run attaches the svc acct without any key). |
