@@ -251,3 +251,135 @@ async def google_mobile_auth(
         expires_in=settings.access_token_expire_minutes * 60,
         user=MobileAuthUser(id=str(user.id), email=user.email),
     )
+
+
+# --- Desktop web app auth (spec 2026-07-18) ---
+#
+# Same authorization-code + PKCE contract as mobile, but against the EXISTING
+# web OAuth client (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET — the legacy dev-flow
+# client) with an https redirect back to the app origin's auth.html. Gmail
+# tokens stay server-side (D4); the browser gets the same app JWT with the
+# shorter web TTL (browser storage is more exposed than a device keychain).
+
+
+def web_redirect_uri(origin: str | None = None) -> str:
+    """Redirect URI for the browser flow, derived server-side — never
+    client-supplied (same defense-in-depth as mobile_redirect_uri). The
+    frontend builds its consent redirect from its OWN origin, and any
+    configured origin other than the first would otherwise pass CORS,
+    complete consent, then fail the token exchange (redirect_uri mismatch).
+    If `origin` is given AND exactly matches a configured entry, the
+    redirect_uri is derived from THAT origin; a client can never inject an
+    unlisted value this way, since the match is validated here against
+    `settings.web_origins_list`, not trusted as-is. Otherwise (absent or
+    unlisted) falls back to the first configured origin (prior behavior).
+    Raises when the web app isn't configured at all."""
+    origins = settings.web_origins_list
+    if not origins:
+        raise ValueError("WEB_APP_ORIGINS is not configured")
+    if origin and origin in origins:
+        return f"{origin}/auth.html"
+    return f"{origins[0]}/auth.html"
+
+
+async def exchange_code_web(
+    code: str, code_verifier: str, origin: str | None = None
+) -> tuple[dict, str]:
+    """Exchange a browser PKCE authorization code for Gmail tokens; return
+    (creds, email). Identity comes from the verified id_token, never the
+    client. `origin` is the browser's own Origin header, validated inside
+    `web_redirect_uri` against the configured allow-list before use."""
+    import httpx
+    from google.auth.transport.requests import Request as GoogleRequest
+    from google.oauth2 import id_token
+
+    async with httpx.AsyncClient(timeout=15) as http:
+        resp = await http.post(
+            _GOOGLE_TOKEN_URI,
+            data={
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": web_redirect_uri(origin=origin),
+                "grant_type": "authorization_code",
+            },
+        )
+    resp.raise_for_status()
+    tokens = resp.json()
+
+    # verify_oauth2_token fetches Google's signing certs with a SYNC transport —
+    # off the event loop, as everywhere else.
+    id_info = await asyncio.to_thread(
+        id_token.verify_oauth2_token,
+        tokens["id_token"],
+        GoogleRequest(),
+        settings.google_client_id,
+    )
+
+    lifetime = int(tokens.get("expires_in", 3600))
+    creds_data = {
+        "token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
+        "token_uri": _GOOGLE_TOKEN_URI,
+        "client_id": settings.google_client_id,
+        "client_secret": settings.google_client_secret,
+        "scopes": (tokens.get("scope") or "").split(),
+        # Absolute expiry so google_token.ensure_fresh refreshes on schedule
+        # (same convention as the mobile flow).
+        "expiry": (
+            datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(seconds=lifetime)
+        ).isoformat(),
+    }
+    return creds_data, id_info["email"]
+
+
+@router.post("/google/web", response_model=MobileAuthResponse)
+async def google_web_auth(
+    payload: MobileAuthRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Browser sign-in: exchange PKCE code -> Gmail tokens (server-side, D4)
+    -> find/create the User -> app session JWT with the web TTL.
+
+    Forwards the browser's own Origin header through to `exchange_code_web` so
+    the redirect_uri used in the token exchange matches whichever configured
+    origin actually started the flow (see `web_redirect_uri`) — the header is
+    only ever a hint, never trusted as-is; validation against the configured
+    allow-list happens inside `web_redirect_uri`. Omitted entirely when absent
+    so the call shape matches the prior (origins[0]-only) behavior exactly.
+    """
+    origin = request.headers.get("origin")
+    extra = {"origin": origin} if origin else {}
+    try:
+        creds_data, email = await exchange_code_web(
+            payload.code, payload.code_verifier, **extra
+        )
+    except Exception as e:
+        # Types-only logging; Google's fixed OAuth error code is safe/diagnostic.
+        reason = type(e).__name__
+        response = getattr(e, "response", None)
+        if response is not None:
+            try:
+                reason = f"{reason}/{response.json().get('error', '')}"
+            except Exception:
+                reason = f"{reason}/HTTP {response.status_code}"
+        _log.warning("web auth exchange failed (%s)", reason)
+        raise HTTPException(status_code=400, detail="Invalid authorization code")
+
+    user = await get_or_create_user(db, email)
+    # Blocking gRPC on the secret-manager backend — off the loop.
+    await asyncio.to_thread(store_token, user.email, creds_data)
+
+    token = create_access_token(
+        subject=str(user.id),
+        email=user.email,
+        expires_minutes=settings.web_token_expire_minutes,
+    )
+    return MobileAuthResponse(
+        access_token=token,
+        expires_in=settings.web_token_expire_minutes * 60,
+        user=MobileAuthUser(id=str(user.id), email=user.email),
+    )

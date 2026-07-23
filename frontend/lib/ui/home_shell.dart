@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../ads/ad_banner_slot.dart';
+import '../ads/ad_banner_slot.dart'
+    if (dart.library.js_interop) '../ads/ad_banner_slot_stub.dart';
 import '../core/providers.dart';
 import 'calendar_screen.dart';
 import 'home_screen.dart';

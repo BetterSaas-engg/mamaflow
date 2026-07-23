@@ -20,11 +20,17 @@ class AuthException implements Exception {
 /// Mobile sign-in (D23): Google serverAuthCode -> backend exchange
 /// (POST /api/v1/auth/google/mobile) -> store the returned app session JWT.
 class AuthService {
-  AuthService(this._api, this._tokenStore, this._google);
+  AuthService(this._api, this._tokenStore, this._google,
+      {String exchangePath = '/api/v1/auth/google/mobile'})
+      // The external param name (`exchangePath`) must stay distinct from the
+      // private field, so an initializing formal isn't an option here.
+      // ignore: prefer_initializing_formals
+      : _exchangePath = exchangePath;
 
   final ApiClient _api;
   final TokenStore _tokenStore;
   final GoogleAuthCodes _google;
+  final String _exchangePath;
 
   /// Returns null when the user cancels the consent sheet — a deliberate act,
   /// not an error; callers must not surface it as a failure.
@@ -33,7 +39,7 @@ class AuthService {
     if (result == null) return null;
 
     final resp = await _api.postJson(
-      '/api/v1/auth/google/mobile',
+      _exchangePath,
       {'code': result.code, 'code_verifier': result.codeVerifier},
     );
 

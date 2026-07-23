@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # Hourly background auto-sync (spec 2026-07-15). Kill switch; cosmetic
     # knob, so parsing is fail-soft (never crashes the app at import).
     auto_sync_enabled: bool = True
+    # Desktop web app (spec 2026-07-18). Comma-separated https origins allowed
+    # to call the API from a browser; empty (default) = no CORS headers at all.
+    web_app_origins: str = ""
+    # Web sessions are shorter than mobile's 30 days (D31): browser storage is
+    # more exposed than a device keychain. Default 7 days.
+    web_token_expire_minutes: int = 7 * 24 * 60
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -105,6 +111,10 @@ class Settings(BaseSettings):
                 "SECRET_KEY must be set to a strong value when ENVIRONMENT != development"
             )
         return self
+
+    @property
+    def web_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.web_app_origins.split(",") if o.strip()]
 
 
 settings = Settings()

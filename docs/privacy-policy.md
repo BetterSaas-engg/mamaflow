@@ -1,3 +1,6 @@
+> Canonical public copy: `website/privacy.html` (served at /privacy on the production domain).
+> Keep both in sync — edit here first, then re-transcribe.
+
 # Mamaflow Privacy Policy (DRAFT — PM review required before publishing)
 
 _Last updated: 2026-07-10. Status: DRAFT for Google OAuth verification (E0). Replace

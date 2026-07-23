@@ -93,4 +93,21 @@ void main() {
 
     expect(await auth.isSignedIn(), true);
   });
+
+  test('posts to the injected exchange path (web uses /auth/google/web)', () async {
+    final api = _MockApi();
+    final store = _MockTokenStore();
+    when(() => api.postJson(any(), any())).thenAnswer((_) async => {
+          'access_token': 'JWT456',
+          'user': {'id': 'u2', 'email': 'p@example.com'},
+        });
+    when(() => store.saveJwt(any())).thenAnswer((_) async {});
+    final auth = AuthService(api, store, _FakeGoogle(_fakeCode),
+        exchangePath: '/api/v1/auth/google/web');
+
+    await auth.signInWithGoogle();
+
+    final captured = verify(() => api.postJson(captureAny(), any())).captured;
+    expect(captured[0], '/api/v1/auth/google/web');
+  });
 }

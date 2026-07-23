@@ -2,7 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'ads/ad_config.dart';
+import 'ads/ad_config.dart' if (dart.library.js_interop) 'ads/ad_config_stub.dart';
 import 'app.dart';
 import 'core/providers.dart';
 
