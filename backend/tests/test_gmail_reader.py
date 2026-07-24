@@ -103,3 +103,115 @@ def test_build_gmail_client_refreshes_mobile_token(monkeypatch):
 
     assert client == "gmail-client"
     assert captured["token"] == "FAKE-FRESH"  # the REFRESHED token, not the stale one
+
+
+# --- Calendar-invite parsing (D37): event data lives in text/calendar, ---
+# --- not the body text; the reader must surface it for extraction.     ---
+
+from api.services.gmail_reader import _compose_body, _extract_calendar_summary  # noqa: E402
+
+_ICS_TORONTO = (
+    "BEGIN:VCALENDAR\r\n"
+    "BEGIN:VEVENT\r\n"
+    "SUMMARY:Akhil Kaushal - 25 Minute Discovery Session\r\n"
+    "DTSTART;TZID=America/Toronto:20260806T140000\r\n"
+    "DTEND;TZID=America/Toronto:20260806T142500\r\n"
+    "LOCATION:Microsoft Teams meeting\r\n"
+    "END:VEVENT\r\n"
+    "END:VCALENDAR\r\n"
+)
+
+
+def _cal_payload(ics: str) -> dict:
+    return {
+        "mimeType": "multipart/alternative",
+        "parts": [
+            {"mimeType": "text/html", "body": {"data": _b64("<p>hi</p>")}},
+            {"mimeType": "text/calendar", "body": {"data": _b64(ics)}},
+        ],
+    }
+
+
+def test_calendar_summary_extracts_event_fields():
+    out = _extract_calendar_summary(_cal_payload(_ICS_TORONTO))
+    assert "Akhil Kaushal - 25 Minute Discovery Session" in out
+    assert "2026-08-06" in out
+    assert "14:00" in out
+    assert "Microsoft Teams meeting" in out
+
+
+def test_calendar_summary_converts_utc_to_local():
+    # 18:00Z on Aug 6 is 14:00 in America/Toronto (EDT) — the invite must not
+    # surface as a 6 PM meeting when the user booked 2 PM local.
+    ics = (
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+        "SUMMARY:Checkup\r\n"
+        "DTSTART:20260806T180000Z\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    out = _extract_calendar_summary(_cal_payload(ics))
+    assert "2026-08-06" in out
+    assert "14:00" in out
+
+
+def test_calendar_summary_all_day_event_has_date_only():
+    ics = (
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+        "SUMMARY:PA Day\r\n"
+        "DTSTART;VALUE=DATE:20260904\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    out = _extract_calendar_summary(_cal_payload(ics))
+    assert "PA Day" in out
+    assert "2026-09-04" in out
+
+
+def test_calendar_summary_unfolds_wrapped_lines_and_unescapes():
+    # RFC 5545: long lines fold with CRLF + one space; unfolding strips BOTH,
+    # so a mid-word fold ("Conf" / "erence") must rejoin without a gap.
+    # Commas escape as backslash-comma.
+    ics = (
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+        "SUMMARY:Parent Teacher Conf\r\n erence\r\n"
+        "DTSTART;VALUE=DATE:20260910\r\n"
+        "LOCATION:Room 12\\, Riverside Elementary\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    out = _extract_calendar_summary(_cal_payload(ics))
+    assert "Parent Teacher Conference" in out
+    assert "Room 12, Riverside Elementary" in out
+
+
+def test_calendar_summary_no_calendar_part_is_empty():
+    payload = {"mimeType": "text/plain", "body": {"data": _b64("hello")}}
+    assert _extract_calendar_summary(payload) == ""
+
+
+def test_calendar_summary_garbage_never_raises():
+    assert _extract_calendar_summary(_cal_payload("not ics at all")) == ""
+    bad = {
+        "mimeType": "multipart/mixed",
+        "parts": [{"mimeType": "text/calendar", "body": {"data": "ab"}}],
+    }
+    assert _extract_calendar_summary(bad) == ""
+
+
+def test_compose_body_prepends_calendar_summary_to_plain_text():
+    payload = {
+        "mimeType": "multipart/mixed",
+        "parts": [
+            {"mimeType": "text/plain", "body": {"data": _b64("See you there!")}},
+            {"mimeType": "text/calendar", "body": {"data": _b64(_ICS_TORONTO)}},
+        ],
+    }
+    out = _compose_body(payload)
+    assert "2026-08-06" in out
+    assert "See you there!" in out
+    assert out.index("2026-08-06") < out.index("See you there!")
+
+
+def test_compose_body_calendar_only_still_yields_text():
+    # Invites with no text/plain part must not come back empty (the gate would
+    # skip them on subject alone — the original 2026-07-24 bug shape).
+    out = _compose_body(_cal_payload(_ICS_TORONTO))
+    assert "2026-08-06" in out

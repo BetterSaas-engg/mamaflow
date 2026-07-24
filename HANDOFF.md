@@ -72,6 +72,26 @@
 >   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
 >      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
 >      output hardening.
+>   5. **✅ FIXED 2026-07-24 (code, D37) — calendar-invite emails never produced items.** Root cause
+>      (proven empirically, NOT a regression): Bookings/Teams/Google invites carry the event data
+>      only in the `text/calendar` MIME part — the body prose has no meeting date — and
+>      `_extract_plain_text` read only `text/plain`, so extraction returned 0 items on BOTH models;
+>      secondarily Haiku scoped "family-related" strictly and dropped business meetings. PM decision
+>      (D37): ALL personal appointments/meetings are in scope — one place to plan everything. Fix:
+>      minimal defensive RFC 5545 parsing in gmail_reader (`_extract_calendar_summary` +
+>      `_compose_body`: SUMMARY/DTSTART/DTEND/LOCATION only, UTC→REMINDER_TZ, garbage→"") prepends
+>      a "Calendar invite details" block to the body inside the normal pipeline; prompt now counts
+>      invited appointments (event_type "other") and treats the invite block as authoritative for
+>      date/time; gate keywords + meetings?/invit\w+. Acceptance-tested live on the real failing
+>      email: Haiku extracts `2026-08-06 14:00` correctly. 219 tests. Security audit PASS
+>      (injection surface traced end-to-end: calendar text stays inside the nonce wrap; TZID never
+>      reaches ZoneInfo; regexes ReDoS-probed; metadata-first + D5 + firewall intact).
+>      **Follow-ups:** (a) audit WARN — no length cap on composed body+ICS text before
+>      Presidio/Claude (pre-existing, cost/DoS hygiene) — add a bound in Phase 1; (b) `.ics` file
+>      *attachments* (attachmentId-based) aren't fetched — inline text/calendar covers standard
+>      invites; (c) first VEVENT only (recurring series → first occurrence).
+>      **USER (testing): clear the test users' markers so already-seen invites re-extract** — SQL
+>      provided in chat; or just send fresh invites.
 >   4. **✅ FIXED 2026-07-23 (code) — cost bug: zero-event emails re-extracted every tick (~$10 CAD/day).**
 >      Root cause: dedup (`existing_message_ids`) keyed off `Item.source_message_id`, so an email that
 >      passed the blocklist but extracted **no** events left no Item → every hourly `auto_sync_tick`

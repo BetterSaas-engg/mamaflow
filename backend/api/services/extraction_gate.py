@@ -40,7 +40,8 @@ _KEYWORD = re.compile(
         rsvp|register|registration|sign[\s-]?up
         |permission|forms?|field\s+trips?|deadline|due|confirm|volunteer
         |practice|rehearsal|recitals?|tryouts?|games?|match|tournament
-        |appointment|reschedule|checkup|check-up|dentist|doctor|vaccin\w+
+        |appointment|meetings?|invit\w+|reschedule|checkup|check-up
+        |dentist|doctor|vaccin\w+
         |pediatric\w*|lessons?|schedule
         |playdate|play\s+date|camp|birthday|party
         |school|class|classroom|teacher|pickup|pick[\s-]?up|drop[\s-]?off
