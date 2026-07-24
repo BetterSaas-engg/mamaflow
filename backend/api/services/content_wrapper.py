@@ -150,6 +150,14 @@ what the user needs to do. event_title may be null for pure actions.
 Do NOT drop an item just because it has no date. A registration link \
 or "please do X" with no date is a valid item_type "action".
 
+Appointments and meetings the user is personally invited to — calendar \
+invites, booking confirmations, video-call meetings, work or personal — \
+ARE items, even when not family-specific. Parents use this calendar to \
+plan around ALL their commitments. Use event_type "other" when no \
+family category fits. When the email includes a "Calendar invite \
+details" block, treat it as the authoritative event title, date, time, \
+and location.
+
 Every item must have at least one of event_title or action_required \
 populated.
 
