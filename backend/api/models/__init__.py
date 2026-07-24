@@ -3,6 +3,15 @@ from api.models.device import Device
 from api.models.item import Item
 from api.models.sender_allowlist import SenderAllowlist
 from api.models.sender_blocklist import SenderBlocklist
+from api.models.synced_message import SyncedMessage
 from api.models.user import User
 
-__all__ = ["Base", "Device", "Item", "SenderAllowlist", "SenderBlocklist", "User"]
+__all__ = [
+    "Base",
+    "Device",
+    "Item",
+    "SenderAllowlist",
+    "SenderBlocklist",
+    "SyncedMessage",
+    "User",
+]

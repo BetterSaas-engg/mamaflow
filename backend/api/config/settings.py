@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # forced re-login mid-use. Revisit (refresh tokens) in the E0 hardening.
     access_token_expire_minutes: int = 30 * 24 * 60
     anthropic_api_key: str = ""
+    # Extraction model (D36). Haiku-first per the email-extraction skill: the
+    # task is schema-locked structured extraction, so the cheap model is the
+    # default ($1/$5 per MTok vs Sonnet's $3/$15 — ~3x cheaper). Flip to
+    # EXTRACTION_MODEL=claude-sonnet-4-6 if accuracy on messy emails dips.
+    extraction_model: str = "claude-haiku-4-5"
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on

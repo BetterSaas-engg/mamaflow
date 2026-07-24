@@ -20,7 +20,6 @@ from api.services.content_wrapper import (
     wrap_untrusted_content,
 )
 
-_MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 2048  # strict schema emits explicit nulls for every field
 
 # Strict tool use: the tool's schema-locked input IS the extraction result.
@@ -131,7 +130,9 @@ def extract_events(
     prompt = build_extraction_prompt(wrapped, nonce)
 
     message = _client.messages.create(
-        model=_MODEL,
+        # Settings-driven (D36): Haiku-first for this schema-locked task; the
+        # EXTRACTION_MODEL env var flips back to Sonnet without a deploy.
+        model=settings.extraction_model,
         max_tokens=_MAX_TOKENS,
         tools=[_EXTRACTION_TOOL],
         tool_choice={"type": "tool", "name": _EXTRACTION_TOOL["name"]},

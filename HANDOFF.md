@@ -72,6 +72,46 @@
 >   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
 >      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
 >      output hardening.
+>   4. **✅ FIXED 2026-07-23 (code) — cost bug: zero-event emails re-extracted every tick (~$10 CAD/day).**
+>      Root cause: dedup (`existing_message_ids`) keyed off `Item.source_message_id`, so an email that
+>      passed the blocklist but extracted **no** events left no Item → every hourly `auto_sync_tick`
+>      (CronTrigger minute=30, 24×/day) re-fetched its body and re-called Claude across the full
+>      `after:30d`/maxResults=50 window (dozens of emails × 24 = hundreds of needless
+>      `claude-sonnet-4-6` calls/day). **Fix (branch `feat/website-web-app`):** new `synced_messages`
+>      marker table (`api/models/synced_message.py`, migration `ea23631396aa`); `mark_message_synced`
+>      writes a `(user, message_id)` marker after every **successful** extraction regardless of event
+>      count; `existing_message_ids` now unions items + markers. A **failed** extraction writes no
+>      marker (marker call sits after `persist_items` inside the per-message try) so next-sync retry is
+>      preserved. Backend 194 tests; per-task **security audit PASS** (firewall/D5 clean — marker holds
+>      only user_id + Gmail message_id + timestamps, no content/derived signal; soft-delete honored;
+>      per-user scoped). **USER: migration applies automatically on the next Railway deploy of `main`
+>      (`alembic upgrade head`); to stop the cost bleed before then, set `AUTO_SYNC_ENABLED=false` and
+>      sync manually.** **Phase-1 follow-ups (not launch-blocking):** (a) `mark_message_synced` uses a
+>      non-atomic select-then-insert — safe today because the in-process `try_start` `already_running`
+>      guard serializes same-user syncs on a single instance; when the multi-instance TTL/invalidation
+>      hook lands, switch to `ON CONFLICT DO NOTHING` (a plain internal rollback risks the
+>      MissingGreenlet session-expiry trap). (b) ~~Prompt caching~~ evaluated and REJECTED (see D36):
+>      the ~2K-token static prefix is below the minimum cacheable prefix (4096 tokens on Haiku 4.5,
+>      2048 on Sonnet 4.6) — it would silently never cache. (c) Batch API for the onboarding
+>      backfill (50% off) — deferred.
+>      **Follow-up shipped same day (D36): cost controls.** Extraction model now settings-driven —
+>      `EXTRACTION_MODEL`, default `claude-haiku-4-5` (~3× cheaper; the email-extraction skill's
+>      "Haiku-first" intent; flip back to `claude-sonnet-4-6` via env if quality dips). New
+>      deterministic pre-extraction gate (`api/services/extraction_gate.py`): emails with zero
+>      temporal tokens AND zero family/action keywords skip Presidio+Claude entirely and are marked
+>      synced (patterns err toward passing — false skip drops an item, false pass costs ~$0.003).
+>      Regression-tested end-to-end (gated mail never reaches Claude; failed extractions still
+>      retried; zero-event test proven RED on pre-fix code). Backend 211 tests. Expected cost:
+>      ~$0.003 USD/email once-ever → ~$1–2.50 CAD/user/month typical. Security audit PASS (firewall
+>      clean; gate boolean never persisted; counts-only logging; ReDoS-probed to 450K chars).
+>      **Known limitation (audit WARN, accepted for launch):** a gate false-skip is permanent —
+>      the message is marked synced and never re-extracted — and the keyword/temporal lists are
+>      English-only, so a real event phrased with zero recognized tokens (e.g. non-English school
+>      mail) would be silently dropped. Monitor via the "gate skipped N/M" log line; if skip rates
+>      look high or non-English users arrive, either broaden the lists or stop marking gated mail
+>      as synced (re-gating is free regex; false skips would then self-heal when patterns improve).
+>      **USER: also set a monthly spend limit in the Anthropic Console (Settings → Limits) as the
+>      hard backstop, and watch the first Haiku-extracted items for quality vs the Sonnet ones.**
 > - Branch `feat/backend-mobile-integration` pushed; **PR #1 open**
 >   (https://github.com/BetterSaas-engg/mamaflow/pull/1) — merge pending PM review.
 

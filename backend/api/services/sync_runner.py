@@ -13,9 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from api.models.user import User
 from api.services import sync_state
 from api.services.ai_extractor import extract_events
+from api.services.extraction_gate import has_extractable_signal
 from api.services.google_token import ReauthRequired
 from api.services.gmail_reader import fetch_message_bodies, fetch_recent_metadata
-from api.services.items import existing_message_ids, persist_items
+from api.services.items import (
+    existing_message_ids,
+    mark_message_synced,
+    persist_items,
+)
 from api.services.privacy_pipeline import redact_pii
 from api.services.sender_blocklist import is_blocked_sender
 
@@ -92,6 +97,7 @@ async def run_sync_job(
             )
 
             items_created = 0
+            gate_skipped = 0
             for _i, (msg, _status) in enumerate(new_passed):
                 # Per-message isolation: a redaction/extraction failure (e.g.
                 # a transient Claude API error) skips THIS message and keeps
@@ -100,11 +106,25 @@ async def run_sync_job(
                 # (2026-07-15: an invalid tool schema 400'd every extraction
                 # and each sync died on its first message.)
                 try:
+                    body = bodies.get(msg["message_id"], "")
+                    # Gate (D36): no temporal token AND no family/action
+                    # keyword → the email cannot yield an item. Skip Presidio
+                    # + Claude entirely, but still mark it synced (the verdict
+                    # is deterministic — re-checking next sync buys nothing).
+                    if not has_extractable_signal(msg["subject"], body):
+                        gate_skipped += 1
+                        await mark_message_synced(db, user_id, msg["message_id"])
+                        sync_state.progress(
+                            user_id,
+                            messages_scanned=len(metadata),
+                            to_process=len(new_passed),
+                            processed=_i + 1,
+                            items_created=items_created,
+                        )
+                        continue
                     # Presidio is CPU-bound spaCy analysis — off the loop, or
                     # every concurrent request stalls for the whole sync.
-                    redaction = await asyncio.to_thread(
-                        redact_pii, bodies.get(msg["message_id"], "")
-                    )
+                    redaction = await asyncio.to_thread(redact_pii, body)
                     extraction = await asyncio.to_thread(
                         extract_events,
                         redaction.redacted_text,
@@ -115,6 +135,11 @@ async def run_sync_job(
                     )
                     saved = await persist_items(db, user, msg["message_id"], extraction.events)
                     items_created += len(saved)
+                    # Mark processed AFTER a successful extraction — even when it
+                    # yielded zero events — so this message is never re-sent to
+                    # Claude. A failed extraction throws before here, writes no
+                    # marker, and is retried next sync (per the isolation note).
+                    await mark_message_synced(db, user_id, msg["message_id"])
                 except Exception as exc:
                     # Types only — never message content (audit log rule).
                     _log.warning(
@@ -139,6 +164,14 @@ async def run_sync_job(
                     items_created=items_created,
                 )
 
+            if gate_skipped:
+                # Counts only, never content (audit log rule).
+                _log.info(
+                    "sync: gate skipped %d/%d messages for user %s",
+                    gate_skipped,
+                    len(new_passed),
+                    user_id,
+                )
             sync_state.finish(
                 user_id,
                 messages_scanned=len(metadata),

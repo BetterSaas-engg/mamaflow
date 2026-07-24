@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.item import Item
+from api.models.synced_message import SyncedMessage
 from api.models.user import User
 from api.schemas.family_event import FamilyItem
 
@@ -13,19 +14,55 @@ async def existing_message_ids(
     user_id,
     message_ids: list[str],
 ) -> set[str]:
-    """Which of these Gmail message ids are already persisted for this user.
-    Used to skip already-synced messages BEFORE body fetch / Claude extraction
-    (incremental sync) — dedup must happen before the expensive calls."""
+    """Which of these Gmail message ids have already been processed for this
+    user. Used to skip already-synced messages BEFORE body fetch / Claude
+    extraction (incremental sync) — dedup must happen before the expensive
+    calls.
+
+    A message counts as processed if EITHER it produced a persisted item OR it
+    carries a `synced_messages` marker (written for zero-event mail). Querying
+    both keeps pre-marker items recognized while stopping the re-extraction of
+    emails that legitimately yield no events.
+    """
     if not message_ids:
         return set()
-    result = await db.execute(
+    item_rows = await db.execute(
         select(Item.source_message_id).where(
             Item.user_id == user_id,
             Item.source_message_id.in_(message_ids),
             Item.deleted_at.is_(None),
         )
     )
-    return {row[0] for row in result}
+    marker_rows = await db.execute(
+        select(SyncedMessage.source_message_id).where(
+            SyncedMessage.user_id == user_id,
+            SyncedMessage.source_message_id.in_(message_ids),
+            SyncedMessage.deleted_at.is_(None),
+        )
+    )
+    return {row[0] for row in item_rows} | {row[0] for row in marker_rows}
+
+
+async def mark_message_synced(
+    db: AsyncSession,
+    user_id,
+    message_id: str,
+) -> None:
+    """Record that a message was successfully extracted (even with zero events)
+    so incremental sync never re-sends it to Claude. Idempotent per
+    (user, message); call only after a successful extraction — a failed one
+    must leave no marker so the next sync retries it."""
+    existing = await db.execute(
+        select(SyncedMessage.id).where(
+            SyncedMessage.user_id == user_id,
+            SyncedMessage.source_message_id == message_id,
+            SyncedMessage.deleted_at.is_(None),
+        ).limit(1)
+    )
+    if existing.first() is not None:
+        return
+    db.add(SyncedMessage(user_id=user_id, source_message_id=message_id))
+    await db.commit()
 
 
 async def persist_items(
