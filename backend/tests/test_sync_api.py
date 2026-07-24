@@ -132,6 +132,63 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
     assert len(listed.json()["items"]) == 1
 
 
+async def test_resync_skips_zero_event_messages(client, db, monkeypatch):
+    """The 2026-07-23 cost bug: an email that extracted NO events left no items
+    row, so dedup never recognized it and every sync re-sent it to Claude
+    (hourly auto-sync × the whole 30-day window ≈ $10 CAD/day). The
+    synced_messages marker must make the second sync skip it entirely."""
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    user, token = await _user_with_token(db)
+    metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+
+    extract_calls = []
+
+    def fake_extract(body, subject, sender, message_id="", email_date=""):
+        extract_calls.append(message_id)
+        return ExtractionResponse(events=[])  # newsletter: nothing extractable
+
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "b" for i in ids})
+    monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
+
+    await client.post("/api/v1/sync", headers=_auth(token))
+    await client.post("/api/v1/sync", headers=_auth(token))
+    second = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+
+    assert extract_calls == ["m1"]  # Claude called ONCE ever, despite zero items
+    assert second["to_process"] == 0  # second sync had nothing to do
+
+
+async def test_failed_extraction_is_retried_next_sync(client, db, monkeypatch):
+    """The marker must NOT suppress retries: a message whose extraction failed
+    (transient Claude error) gets no marker and is re-attempted next sync."""
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    user, token = await _user_with_token(db)
+    metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "b" for i in ids})
+
+    extract_calls = []
+
+    def flaky_extract(body, subject, sender, message_id="", email_date=""):
+        extract_calls.append(message_id)
+        if len(extract_calls) == 1:
+            raise RuntimeError("transient API error")
+        return ExtractionResponse(events=[])
+
+    monkeypatch.setattr(sync_runner, "extract_events", flaky_extract)
+
+    await client.post("/api/v1/sync", headers=_auth(token))  # fails → no marker
+    await client.post("/api/v1/sync", headers=_auth(token))  # retries → succeeds
+    await client.post("/api/v1/sync", headers=_auth(token))  # now skipped
+
+    assert extract_calls == ["m1", "m1"]  # retried once, then never again
+
+
 async def test_sync_cooldown_returns_429(client, db, monkeypatch):
     """A3 audit finding: repeated POST /sync triggered a full 30-day metadata
     scan each time. A per-user cooldown between completed syncs closes it."""
