@@ -66,7 +66,7 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
 
     def fake_bodies(email, ids):
         fetched_ids.extend(ids)
-        return {mid: "body" for mid in ids}
+        return {mid: "practice on Thursday" for mid in ids}
 
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", fake_bodies)
     monkeypatch.setattr(
@@ -109,7 +109,7 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
 
     def fake_bodies(email, ids):
         body_calls.append(list(ids))
-        return {i: "b" for i in ids}
+        return {i: "practice on Thursday" for i in ids}
 
     def fake_extract(body, subject, sender, message_id="", email_date=""):
         extract_calls.append(message_id)
@@ -150,7 +150,7 @@ async def test_resync_skips_zero_event_messages(client, db, monkeypatch):
         extract_calls.append(message_id)
         return ExtractionResponse(events=[])  # newsletter: nothing extractable
 
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "b" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids})
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
     await client.post("/api/v1/sync", headers=_auth(token))
@@ -159,6 +159,43 @@ async def test_resync_skips_zero_event_messages(client, db, monkeypatch):
 
     assert extract_calls == ["m1"]  # Claude called ONCE ever, despite zero items
     assert second["to_process"] == 0  # second sync had nothing to do
+
+
+async def test_gated_email_never_reaches_claude_and_stays_skipped(client, db, monkeypatch):
+    """D36 gate: an email with no temporal/family signal skips Presidio AND
+    Claude, is still marked synced (no re-check next sync), and counts as
+    processed in the status counters."""
+    from api.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    user, token = await _user_with_token(db)
+    metadata = [
+        {"message_id": "m_gate", "sender": "shop@store.com", "subject": "Update", "date": "Mon"},
+        {"message_id": "m_real", "sender": "school@x.org", "subject": "Practice", "date": "Mon"},
+    ]
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    bodies = {
+        "m_gate": "Discover our newest arrivals with free shipping.",  # no signal
+        "m_real": "Soccer practice moves to Thursday 3:30 PM.",
+    }
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: bodies)
+
+    extract_calls = []
+
+    def fake_extract(body, subject, sender, message_id="", email_date=""):
+        extract_calls.append(message_id)
+        return ExtractionResponse(events=[])
+
+    monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
+
+    await client.post("/api/v1/sync", headers=_auth(token))
+    first = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+    await client.post("/api/v1/sync", headers=_auth(token))
+    second = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+
+    assert extract_calls == ["m_real"]  # gated email NEVER hit Claude
+    assert first["processed"] == 2      # but it still counted as processed
+    assert second["to_process"] == 0    # and is not revisited next sync
 
 
 async def test_failed_extraction_is_retried_next_sync(client, db, monkeypatch):
@@ -170,7 +207,7 @@ async def test_failed_extraction_is_retried_next_sync(client, db, monkeypatch):
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
     monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "b" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids})
 
     extract_calls = []
 
@@ -239,7 +276,7 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
         {"message_id": "b", "sender": "s@school.edu", "subject": "y", "date": ""},
     ]
     monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: meta)
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "body" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids})
     # s@school.edu is not on the default blocklist, so both messages pass classify.
 
     # Record processed at each extract call to prove it increments mid-run.
@@ -275,7 +312,7 @@ async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypat
     meta = [{"message_id": "t1", "sender": "s@school.edu", "subject": "x", "date": ""}]
     monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: meta)
     monkeypatch.setattr(
-        sync_runner, "fetch_message_bodies", lambda email, ids: {i: "body" for i in ids}
+        sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids}
     )
     monkeypatch.setattr(
         sync_runner, "extract_events",
@@ -329,7 +366,7 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
     monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
     monkeypatch.setattr(
         sync_runner, "fetch_message_bodies",
-        lambda email, ids: {mid: "body" for mid in ids},
+        lambda email, ids: {mid: "practice on Thursday" for mid in ids},
     )
 
     def fake_extract(body, subject, sender, message_id="", email_date=""):
