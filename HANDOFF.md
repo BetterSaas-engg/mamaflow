@@ -82,7 +82,7 @@
 >      writes a `(user, message_id)` marker after every **successful** extraction regardless of event
 >      count; `existing_message_ids` now unions items + markers. A **failed** extraction writes no
 >      marker (marker call sits after `persist_items` inside the per-message try) so next-sync retry is
->      preserved. Backend 198 tests; per-task **security audit PASS** (firewall/D5 clean — marker holds
+>      preserved. Backend 194 tests; per-task **security audit PASS** (firewall/D5 clean — marker holds
 >      only user_id + Gmail message_id + timestamps, no content/derived signal; soft-delete honored;
 >      per-user scoped). **USER: migration applies automatically on the next Railway deploy of `main`
 >      (`alembic upgrade head`); to stop the cost bleed before then, set `AUTO_SYNC_ENABLED=false` and
