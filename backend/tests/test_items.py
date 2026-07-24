@@ -1,7 +1,12 @@
 """Tests for item persistence + listing service (Phase B)."""
 
 from api.schemas.family_event import FamilyItem
-from api.services.items import list_items, persist_items
+from api.services.items import (
+    existing_message_ids,
+    list_items,
+    mark_message_synced,
+    persist_items,
+)
 from api.services.users import get_or_create_user
 
 
@@ -58,3 +63,45 @@ async def test_list_filters_by_date_range_and_type(db):
 
     actions = await list_items(db, user, item_type="action")
     assert {i.event_title for i in actions} == {"Todo"}
+
+
+async def test_existing_ids_recognizes_messages_that_produced_items(db):
+    user = await get_or_create_user(db, "parent@example.com")
+    await persist_items(db, user, "msg1", [_event("Soccer", "2026-06-20")])
+
+    already = await existing_message_ids(db, user.id, ["msg1", "msg2"])
+
+    assert already == {"msg1"}  # msg2 never seen
+
+
+async def test_zero_event_message_is_skipped_after_being_marked(db):
+    # The cost bug: an email that extracts no events left no trace, so every
+    # sync re-sent it to Claude. A marker fixes that even with no items row.
+    user = await get_or_create_user(db, "parent@example.com")
+
+    before = await existing_message_ids(db, user.id, ["empty-msg"])
+    assert before == set()  # nothing persisted yet → would be (re)processed
+
+    await mark_message_synced(db, user.id, "empty-msg")
+
+    after = await existing_message_ids(db, user.id, ["empty-msg"])
+    assert after == {"empty-msg"}  # now skipped despite producing zero items
+
+
+async def test_mark_message_synced_is_idempotent(db):
+    user = await get_or_create_user(db, "parent@example.com")
+
+    await mark_message_synced(db, user.id, "msg1")
+    await mark_message_synced(db, user.id, "msg1")  # second pass must not raise
+
+    assert await existing_message_ids(db, user.id, ["msg1"]) == {"msg1"}
+
+
+async def test_sync_markers_are_scoped_to_the_user(db):
+    alice = await get_or_create_user(db, "alice@example.com")
+    bob = await get_or_create_user(db, "bob@example.com")
+
+    await mark_message_synced(db, alice.id, "shared-id")
+
+    assert await existing_message_ids(db, alice.id, ["shared-id"]) == {"shared-id"}
+    assert await existing_message_ids(db, bob.id, ["shared-id"]) == set()

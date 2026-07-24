@@ -15,7 +15,11 @@ from api.services import sync_state
 from api.services.ai_extractor import extract_events
 from api.services.google_token import ReauthRequired
 from api.services.gmail_reader import fetch_message_bodies, fetch_recent_metadata
-from api.services.items import existing_message_ids, persist_items
+from api.services.items import (
+    existing_message_ids,
+    mark_message_synced,
+    persist_items,
+)
 from api.services.privacy_pipeline import redact_pii
 from api.services.sender_blocklist import is_blocked_sender
 
@@ -115,6 +119,11 @@ async def run_sync_job(
                     )
                     saved = await persist_items(db, user, msg["message_id"], extraction.events)
                     items_created += len(saved)
+                    # Mark processed AFTER a successful extraction — even when it
+                    # yielded zero events — so this message is never re-sent to
+                    # Claude. A failed extraction throws before here, writes no
+                    # marker, and is retried next sync (per the isolation note).
+                    await mark_message_synced(db, user_id, msg["message_id"])
                 except Exception as exc:
                     # Types only — never message content (audit log rule).
                     _log.warning(
