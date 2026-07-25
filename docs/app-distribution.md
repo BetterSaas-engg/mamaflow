@@ -94,18 +94,50 @@ Firebase services are cleaner with it.)
 **B3. Create the app record:** App Store Connect → My Apps → “+” → New App → platform
 iOS, name Mamaflow, bundle id from B1, any SKU.
 
-**B4. Build + upload:**
+**B4. Build + upload — VERIFIED FLOW (2026-07-25, first upload).**
+
+Xcode-account signing was unusable (fresh team, zero registered devices → no dev
+profiles; portal membership sync lag), so releases use **manual distribution
+signing driven by the App Store Connect API key** — the CI pattern. Standing
+assets on the build Mac (all created 2026-07-25):
+
+- ASC API key `mamaflow-ci` — Key ID `A76YMZ8L97`, Issuer
+  `48456377-ecc9-4227-a214-c178134c255d`, file at
+  `~/.appstoreconnect/private_keys/AuthKey_A76YMZ8L97.p8`
+- Apple Distribution cert (serial `4D2AEE71…`, made via `POST /v1/certificates`)
+  + private key, in keychain `mamaflow-build.keychain`; keychain password at
+  `~/.appstoreconnect/mamaflow-build-keychain.pass`, cert private key backup at
+  `~/.appstoreconnect/mamaflow-dist-cert-private.key`
+- Provisioning profile **"Mamaflow AppStore"** (`IOS_APP_STORE`, via
+  `POST /v1/profiles`) installed under `~/Library/MobileDevice/Provisioning
+  Profiles/` — expires ~1 year; re-mint via the same API when it does
+- `Runner` target **Release** config: `CODE_SIGN_STYLE=Manual`,
+  `CODE_SIGN_IDENTITY=Apple Distribution`,
+  `PROVISIONING_PROFILE_SPECIFIER=Mamaflow AppStore` (Debug/Profile stay
+  Automatic). Committed in the repo.
+
+Per release (bump `pubspec.yaml` version first):
 
 ```bash
 cd frontend
-flutter build ipa --release \
+security unlock-keychain -p "$(cat ~/.appstoreconnect/mamaflow-build-keychain.pass)" mamaflow-build.keychain
+flutter build ios --release --no-codesign \
   --dart-define=API_BASE_URL=https://mamaflow-production.up.railway.app \
   --dart-define=GOOGLE_IOS_CLIENT_ID=<ios client id>
-# → build/ios/archive/Runner.xcarchive and build/ios/ipa/*.ipa
+cd ios
+xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release \
+  archive -archivePath ../build/ios/archive/Runner.xcarchive \
+  -destination 'generic/platform=iOS'
+xcodebuild -exportArchive -archivePath ../build/ios/archive/Runner.xcarchive \
+  -exportPath ../build/ios/ipa -exportOptionsPlist ../build/ExportOptions.plist
+xcrun altool --upload-app -f ../build/ios/ipa/mamaflow.ipa -t ios \
+  --apiKey A76YMZ8L97 --apiIssuer 48456377-ecc9-4227-a214-c178134c255d
 ```
 
-Upload the `.ipa` with the **Transporter** app (Mac App Store) or
-`xcrun altool --upload-app` — or open the `.xcarchive` in Xcode Organizer → Distribute.
+(`frontend/build/ExportOptions.plist`: method `app-store-connect`, manual
+signing, profile mapping — regenerate from this doc if `build/` was cleaned:
+signingStyle manual, signingCertificate "Apple Distribution",
+provisioningProfiles {bundle id → "Mamaflow AppStore"}.)
 
 **B5. TestFlight:** App Store Connect → the app → TestFlight → the build appears after
 processing (~15 min) → answer the export-compliance question (uses standard HTTPS only →
