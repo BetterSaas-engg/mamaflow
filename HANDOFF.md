@@ -326,6 +326,21 @@
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
 
+> **Update 2026-07-25 — Tester distribution SHIPPED both platforms (playbook: `docs/app-distribution.md`).**
+> **Android:** release signing via gitignored `android/key.properties` + user keystore
+> (`~/mamaflow-upload.jks`, SHA-1 `87:BE:6A:05:8D:17:76:24:9A:02:42:95:4A:F7:7C:9C:AC:A1:4E:43`);
+> signed `app-release.apk` built + signature-verified (CN=mama flow/Optimacore) → user uploads to
+> Firebase App Distribution. **iOS: 1.0(1) UPLOADED to App Store Connect/TestFlight** (delivery
+> `a6e98aae`). Apple setup done along the way: App ID `com.bettersaas.mamaflow.mamaflow` with Push;
+> **APNs key `U9L2457D7N` uploaded to Firebase (dev+prod)** — Apple side of Track B push is DONE
+> (backend still dark until `FIREBASE_CREDENTIALS_JSON` on Railway); ASC app record created;
+> Sabiran (`sabiranthapa@icloud.com`) is team Admin. Signing gotcha solved: fresh team has zero
+> devices → automatic archive signing impossible; releases use **manual Apple Distribution signing
+> minted via the ASC API key `mamaflow-ci`/`A76YMZ8L97`** (cert+profile+build keychain on the build
+> Mac — full per-release commands in the playbook). **USER remaining:** TestFlight export-compliance
+> answer (standard HTTPS) + add internal testers; upload the Android APK to Firebase App
+> Distribution if not yet done; back up keystore/.p8s/API key per the storage scheme.
+
 > **Update 2026-07-22 — Domain + Apple Developer acquired.** USER purchased **themamaflow.com**
 > and enrolled in the **Apple Developer Program**. Landing CTA now points at
 > `https://app.themamaflow.com` (was `example.invalid`). Remaining USER steps for the domain
