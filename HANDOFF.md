@@ -326,6 +326,16 @@
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
 
+> **Update 2026-07-26 — Android release-crash FIXED (1.0.0+2).** The first release APK crashed
+> before the splash: R8 (release-only) stripped `androidx.work.impl.WorkDatabase_Impl`, which
+> WorkManager (transitive via google_mobile_ads) creates by reflection at process start. Debug
+> never minifies → all prior testing passed. Fix: `android/app/proguard-rules.pro` keep rules +
+> wired into the release buildType; reproduced + verified on emulator (boots to sign-in, zero
+> exceptions). iOS 1.0(1) unaffected (no R8) — TestFlight build working per USER. **USER:
+> re-upload `frontend/build/app/outputs/flutter-apk/app-release.apk` (1.0.0+2) to Firebase App
+> Distribution.** Watch-out for future release features: anything reflection-based may need a
+> keep rule — test RELEASE builds, not just debug, before distributing.
+
 > **Update 2026-07-25 — Tester distribution SHIPPED both platforms (playbook: `docs/app-distribution.md`).**
 > **Android:** release signing via gitignored `android/key.properties` + user keystore
 > (`~/mamaflow-upload.jks`, SHA-1 `87:BE:6A:05:8D:17:76:24:9A:02:42:95:4A:F7:7C:9C:AC:A1:4E:43`);
