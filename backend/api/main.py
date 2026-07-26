@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.auth.imap_auth import router as imap_auth_router
 from api.auth.oauth import router as auth_router
 from api.config.settings import settings
 from api.db.session import engine
@@ -41,6 +42,7 @@ app = FastAPI(title="Mamaflow API", version="0.1.0", lifespan=lifespan)
 configure_cors(app)
 
 app.include_router(auth_router)
+app.include_router(imap_auth_router)
 app.include_router(sync_router)
 app.include_router(items_router)
 app.include_router(devices_router)

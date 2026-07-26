@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # IMAP providers (Yahoo/Rogers, iCloud): socket timeout for connect/login/
     # fetch. Must stay under the frontend's 30s Dio timeout with headroom.
     imap_timeout_seconds: int = 25
+    # Brute-force throttle for POST /auth/imap (credential-stuffing surface).
+    imap_auth_max_attempts_per_ip: int = 10
+    imap_auth_max_failures_per_email: int = 5
+    imap_auth_window_seconds: int = 900
     # Push reminders (Track B). Inert unless firebase_credentials_json is set
     # (the FCM service-account JSON — a credential, env only, never the DB).
     firebase_credentials_json: str = ""
