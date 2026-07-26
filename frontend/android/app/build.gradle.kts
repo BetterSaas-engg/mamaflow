@@ -56,6 +56,11 @@ android {
 
     buildTypes {
         release {
+            // R8 keep rules — Room/WorkManager reflection (see proguard-rules.pro).
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {
