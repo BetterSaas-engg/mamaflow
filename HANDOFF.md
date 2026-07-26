@@ -332,6 +332,22 @@
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
 
+> **Update 2026-07-26 — Multi-provider mail Phase 1 built (D38): IMAP app-password sign-in for
+> Yahoo/Rogers + iCloud.** No Google account required — the app-password connection IS the sign-in
+> (`POST /api/v1/auth/imap` verifies a real IMAP login, issues the same app JWT, stores the
+> credential in the token store under `mail-<provider>-<hash>`; Google keys unchanged). New
+> `users.provider` column (migration `c57ffd09b56b`), provider registry (`mail_providers.py`),
+> `imap_reader.py` (metadata-first, RFC822/ICS, UIDVALIDITY-proof), `mail_reader` dispatch facade,
+> shared `email_body.py`, brute-force `auth_throttle`, provider picker + app-password screens in the
+> app. Backend 266 tests, frontend 102; `flutter analyze` clean; security audit **PASS** (see
+> commit trail / audit). Existing Google flow untouched. **USER:** (1) migration auto-applies on the
+> next Railway deploy of main; (2) strongly recommend `TOKEN_STORE_BACKEND=secret-manager` before
+> real IMAP testers (in-memory loses app passwords on restart → re-enter, like Google today);
+> (3) tester app-password instructions are in `docs/app-distribution.md`; (4) privacy policy should
+> gain a line that provider app passwords are stored encrypted server-side and used only to read
+> mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
+> `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
+
 > **Update 2026-07-26 — Android release-crash FIXED (1.0.0+2).** The first release APK crashed
 > before the splash: R8 (release-only) stripped `androidx.work.impl.WorkDatabase_Impl`, which
 > WorkManager (transitive via google_mobile_ads) creates by reflection at process start. Debug

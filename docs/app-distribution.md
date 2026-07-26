@@ -156,3 +156,37 @@ Blocked on E0: Google restricted-scope verification (CASA security assessment; n
 privacy policy + homepage on themamaflow.com — live), plus Play Console ($25 one-time,
 requires a closed-testing period for new personal accounts) and App Store review. Also:
 swap AdMob test ids, `app-ads.txt`, real ad units (D21/D32).
+
+---
+
+## Tester onboarding: non-Gmail mailboxes (Yahoo / Rogers / iCloud)
+
+Testers without a Google account sign in with their own mailbox using an
+**app password** (a provider-generated password scoped to one app — not their
+normal login password). In Mamaflow: sign-in screen → the provider tile →
+follow the on-screen steps → paste email + app password → Connect.
+
+Send testers the relevant snippet:
+
+**Yahoo Mail**
+1. Go to https://login.yahoo.com/myaccount/security/app-password (sign in).
+2. "Generate and manage app passwords" → create one named "Mamaflow".
+3. Copy the 16-character password; in Mamaflow tap **Continue with Yahoo Mail**,
+   enter your Yahoo email + that password.
+
+**Rogers** (Rogers email is Yahoo-hosted)
+1. Same Yahoo page as above, signing in with your **@rogers.com** address.
+2. Generate the app password, then tap **Continue with Rogers Mail** in the app.
+
+**iCloud Mail**
+1. Two-factor auth must be ON for your Apple ID, and iCloud Mail enabled.
+2. https://account.apple.com → Sign-In and Security → App-Specific Passwords →
+   generate one named "Mamaflow".
+3. Tap **Continue with iCloud Mail**, use your **primary** iCloud email + that
+   password.
+
+Caveats to pass on: use the app password, not the account password (the #1
+error); after a backend deploy an IMAP tester re-enters the app password
+(in-memory token store until Secret Manager is enabled — same as Google today);
+to disconnect, delete the account in Settings AND revoke the "Mamaflow" app
+password at your provider.
