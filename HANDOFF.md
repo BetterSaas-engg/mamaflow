@@ -339,8 +339,10 @@
 > `users.provider` column (migration `c57ffd09b56b`), provider registry (`mail_providers.py`),
 > `imap_reader.py` (metadata-first, RFC822/ICS, UIDVALIDITY-proof), `mail_reader` dispatch facade,
 > shared `email_body.py`, brute-force `auth_throttle`, provider picker + app-password screens in the
-> app. Backend 266 tests, frontend 102; `flutter analyze` clean; security audit **PASS** (see
-> commit trail / audit). Existing Google flow untouched. **USER:** (1) migration auto-applies on the
+> app. Backend 271 tests, frontend 102; `flutter analyze` clean; security audit found 2 BLOCKs (IMAP
+> CRLF command-injection in the `/auth/imap` payload; stale app-password credentials surviving a
+> provider switch / account deletion) — **both fixed + regression-tested** (CRLF/charset validators;
+> `delete_other_tokens` on every sign-in + `delete_all_tokens` on deletion), re-audit clean. Existing Google flow untouched. **USER:** (1) migration auto-applies on the
 > next Railway deploy of main; (2) strongly recommend `TOKEN_STORE_BACKEND=secret-manager` before
 > real IMAP testers (in-memory loses app passwords on restart → re-enter, like Google today);
 > (3) tester app-password instructions are in `docs/app-distribution.md`; (4) privacy policy should

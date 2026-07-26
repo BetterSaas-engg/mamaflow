@@ -19,16 +19,17 @@ import asyncio
 import datetime
 import imaplib
 import logging
+import re
 import socket
 import ssl
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.jwt import create_access_token
 from api.auth.oauth import MobileAuthResponse, MobileAuthUser
-from api.auth.token_store import delete_token, store_token
+from api.auth.token_store import delete_other_tokens, store_token
 from api.config.settings import settings
 from api.db.session import get_db
 from api.services import auth_throttle
@@ -39,10 +40,40 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _log = logging.getLogger(__name__)
 
 
+# Rejects control chars — CR/LF here is an IMAP command-injection vector:
+# imaplib.login() sends the username UNQUOTED and does not escape CR/LF in the
+# quoted password, so a newline would split the LOGIN into extra IMAP commands
+# on the wire to Yahoo/Apple. Validated once at the boundary; the reader only
+# ever replays what was accepted here.
+_EMAIL_RE = re.compile(r"^[^\s@\x00]+@[^\s@\x00]+\.[^\s@\x00]+$")
+_CONTROL_RE = re.compile(r"[\r\n\x00]")
+
+
 class ImapAuthRequest(BaseModel):
     provider: str
     email: str
     app_password: SecretStr
+
+    @field_validator("provider")
+    @classmethod
+    def _clean_provider(cls, v: str) -> str:
+        if _CONTROL_RE.search(v):
+            raise ValueError("invalid provider")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _valid_email(cls, v: str) -> str:
+        if not _EMAIL_RE.match(v.strip()):
+            raise ValueError("invalid email address")
+        return v
+
+    @field_validator("app_password")
+    @classmethod
+    def _no_control_in_password(cls, v: SecretStr) -> SecretStr:
+        if _CONTROL_RE.search(v.get_secret_value()):
+            raise ValueError("invalid app password")
+        return v
 
 
 class _MailboxUnavailable(Exception):
@@ -123,10 +154,6 @@ async def imap_auth(
     auth_throttle.record_success(email)
 
     user = await get_or_create_user(db, email, provider=provider.key)
-    # One active mail source per user (Phase 1): a provider switch leaves the
-    # previous provider's credential behind — clean it up best-effort.
-    if provider.key != "google":
-        await asyncio.to_thread(delete_token, user.email, "google")
 
     credential = {
         "kind": "imap_app_password",
@@ -138,6 +165,10 @@ async def imap_auth(
     # Blocking gRPC on the secret-manager backend — off the loop (D4 path,
     # same as Google tokens).
     await asyncio.to_thread(store_token, user.email, credential, provider.key)
+    # One active mail source per user (Phase 1): purge any credential left
+    # under a different provider (google, or another IMAP provider) so a
+    # provider switch never leaves a live app password behind.
+    await asyncio.to_thread(delete_other_tokens, user.email, provider.key)
 
     token = create_access_token(subject=str(user.id), email=user.email)
     return MobileAuthResponse(

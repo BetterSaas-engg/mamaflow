@@ -209,3 +209,31 @@ def list_users() -> list[str]:
 
 def delete_token(user_email: str, provider: str = "google") -> None:
     _get_store().delete(user_email, provider)
+
+
+def _all_provider_keys() -> list[str]:
+    # Lazy import avoids any import-order coupling with the services layer.
+    from api.services.mail_providers import PROVIDERS
+
+    return list(PROVIDERS)
+
+
+def delete_other_tokens(user_email: str, keep_provider: str) -> None:
+    """Purge this email's stored credential under EVERY provider except the one
+    just written. Called on every successful sign-in so a user who moves
+    between providers (e.g. yahoo → google → icloud) never leaves a live app
+    password / OAuth token behind under an old provider (D4 credential
+    lifecycle). Idempotent — deleting an absent key is a no-op."""
+    store = _get_store()
+    for key in _all_provider_keys():
+        if key != keep_provider:
+            store.delete(user_email, key)
+
+
+def delete_all_tokens(user_email: str) -> None:
+    """Purge this email's credential under every known provider — used on
+    account deletion so nothing survives, regardless of which providers the
+    account passed through."""
+    store = _get_store()
+    for key in _all_provider_keys():
+        store.delete(user_email, key)

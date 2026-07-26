@@ -153,3 +153,45 @@ async def test_validation_error_never_echoes_password(client):
 async def test_empty_password_is_401_not_500(client):
     resp = await client.post("/api/v1/auth/imap", json=_payload(password="   "))
     assert resp.status_code == 401
+
+
+# --- Audit BLOCK 1: IMAP command-injection guard ---
+
+
+async def test_crlf_in_email_is_rejected_before_imap(client):
+    FakeIMAP.fail_login = False
+    resp = await client.post(
+        "/api/v1/auth/imap",
+        json=_payload(email="victim@yahoo.com\r\nA002 LOGIN attacker pw"),
+    )
+    assert resp.status_code == 422  # never reaches imaplib
+
+
+async def test_crlf_in_app_password_is_rejected(client):
+    resp = await client.post(
+        "/api/v1/auth/imap",
+        json=_payload(password="good\r\nA002 CAPABILITY"),
+    )
+    assert resp.status_code == 422
+
+
+async def test_email_without_at_is_rejected(client):
+    resp = await client.post("/api/v1/auth/imap", json=_payload(email="notanemail"))
+    assert resp.status_code == 422
+
+
+# --- Audit BLOCK 2: no stale credential survives a provider switch ---
+
+
+async def test_switching_between_imap_providers_purges_the_old_one(client, db):
+    from api.auth.token_store import get_token
+
+    await client.post("/api/v1/auth/imap", json=_payload(email="p@icloud.com", provider="icloud",
+                                                         password="aaaa bbbb cccc dddd"))
+    assert get_token("p@icloud.com", "icloud") is not None
+
+    # Same address now connects via Yahoo — the iCloud credential must be gone.
+    await client.post("/api/v1/auth/imap", json=_payload(email="p@icloud.com", provider="yahoo"))
+
+    assert get_token("p@icloud.com", "yahoo") is not None
+    assert get_token("p@icloud.com", "icloud") is None
