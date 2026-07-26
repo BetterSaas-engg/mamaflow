@@ -45,7 +45,7 @@ async def test_tick_syncs_token_holders_and_skips_tokenless(
 
     # Only A has a stored Gmail token.
     monkeypatch.setattr(
-        auto_sync, "get_token", lambda email: {"token": "t"} if email == "a@x.com" else None
+        auto_sync, "get_token", lambda email, provider="google": {"token": "t"} if email == "a@x.com" else None
     )
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
@@ -63,7 +63,7 @@ async def test_tick_skips_soft_deleted_users(db, session_factory, monkeypatch):
     await db.commit()
     sync_state._states.clear()
 
-    monkeypatch.setattr(auto_sync, "get_token", lambda email: {"token": "t"})
+    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -78,7 +78,7 @@ async def test_tick_respects_running_and_cooldown(db, session_factory, monkeypat
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 3600)
 
-    monkeypatch.setattr(auto_sync, "get_token", lambda email: {"token": "t"})
+    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -104,7 +104,7 @@ async def test_one_user_failure_does_not_stop_the_pass(
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
 
-    def token_or_boom(email):
+    def token_or_boom(email, provider="google"):
         if email == "boom@x.com":
             raise RuntimeError("secret manager down")
         return {"token": "t"}

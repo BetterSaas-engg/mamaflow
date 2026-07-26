@@ -1,8 +1,8 @@
-"""Hourly background Gmail sync per signed-in user (spec 2026-07-15).
+"""Hourly background mail sync per signed-in user (spec 2026-07-15).
 
 Reuses the manual sync's job and state gate — auto and manual syncs can
 never double-run, and the manual cooldown carries over. Users without a
-stored Gmail token are skipped (normal until A1/Secret Manager is live).
+stored credential are skipped (normal until A1/Secret Manager is live).
 """
 
 import asyncio
@@ -27,14 +27,14 @@ async def auto_sync_tick(
     try/except — one user's failure never stops the pass (types-only logs)."""
     async with session_factory() as db:
         rows = await db.execute(
-            select(User.id, User.email).where(User.deleted_at.is_(None))
+            select(User.id, User.email, User.provider).where(User.deleted_at.is_(None))
         )
-        candidates = [(row.id, row.email) for row in rows]
+        candidates = [(row.id, row.email, row.provider) for row in rows]
 
-    for user_id, email in candidates:
+    for user_id, email, provider in candidates:
         try:
             # Secret Manager reads are blocking network I/O — off the loop.
-            token = await asyncio.to_thread(get_token, email)
+            token = await asyncio.to_thread(get_token, email, provider)
             if token is None:
                 _log.debug("auto-sync: no stored token for user %s", user_id)
                 continue

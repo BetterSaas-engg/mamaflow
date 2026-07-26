@@ -60,18 +60,18 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
         {"message_id": "m_ok", "sender": "school@allowed.org", "subject": "Soccer", "date": "Mon"},
         {"message_id": "m_block", "sender": "billing@blocked.com", "subject": "Invoice", "date": "Tue"},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
 
     fetched_ids = []
 
-    def fake_bodies(email, ids):
+    def fake_bodies(email, ids, provider="google"):
         fetched_ids.extend(ids)
         return {mid: "practice on Thursday" for mid in ids}
 
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", fake_bodies)
     monkeypatch.setattr(
         sync_runner, "extract_events",
-        lambda body, subject, sender, message_id="", email_date="": ExtractionResponse(
+        lambda body, subject, sender, message_id="", email_date="", provider="google": ExtractionResponse(
             events=[FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")]
         ),
     )
@@ -102,16 +102,16 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
 
     body_calls = []
     extract_calls = []
 
-    def fake_bodies(email, ids):
+    def fake_bodies(email, ids, provider="google"):
         body_calls.append(list(ids))
         return {i: "practice on Thursday" for i in ids}
 
-    def fake_extract(body, subject, sender, message_id="", email_date=""):
+    def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
         return ExtractionResponse(events=[FamilyItem(item_type="event", event_title="X")])
 
@@ -142,15 +142,15 @@ async def test_resync_skips_zero_event_messages(client, db, monkeypatch):
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
 
     extract_calls = []
 
-    def fake_extract(body, subject, sender, message_id="", email_date=""):
+    def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
         return ExtractionResponse(events=[])  # newsletter: nothing extractable
 
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids})
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
     await client.post("/api/v1/sync", headers=_auth(token))
@@ -173,16 +173,16 @@ async def test_gated_email_never_reaches_claude_and_stays_skipped(client, db, mo
         {"message_id": "m_gate", "sender": "shop@store.com", "subject": "Update", "date": "Mon"},
         {"message_id": "m_real", "sender": "school@x.org", "subject": "Practice", "date": "Mon"},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
     bodies = {
         "m_gate": "Discover our newest arrivals with free shipping.",  # no signal
         "m_real": "Soccer practice moves to Thursday 3:30 PM.",
     }
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: bodies)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": bodies)
 
     extract_calls = []
 
-    def fake_extract(body, subject, sender, message_id="", email_date=""):
+    def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
         return ExtractionResponse(events=[])
 
@@ -206,12 +206,12 @@ async def test_failed_extraction_is_retried_next_sync(client, db, monkeypatch):
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids})
 
     extract_calls = []
 
-    def flaky_extract(body, subject, sender, message_id="", email_date=""):
+    def flaky_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
         if len(extract_calls) == 1:
             raise RuntimeError("transient API error")
@@ -233,8 +233,8 @@ async def test_sync_cooldown_returns_429(client, db, monkeypatch):
 
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 60)
     _, token = await _user_with_token(db)
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: [])
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {})
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": [])
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {})
 
     first = await client.post("/api/v1/sync", headers=_auth(token))
     second = await client.post("/api/v1/sync", headers=_auth(token))
@@ -275,8 +275,8 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
         {"message_id": "a", "sender": "s@school.edu", "subject": "x", "date": ""},
         {"message_id": "b", "sender": "s@school.edu", "subject": "y", "date": ""},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: meta)
-    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids})
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": meta)
+    monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids})
     # s@school.edu is not on the default blocklist, so both messages pass classify.
 
     # Record processed at each extract call to prove it increments mid-run.
@@ -310,9 +310,9 @@ async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypat
 
     user = await get_or_create_user(db, "offloop@example.com")
     meta = [{"message_id": "t1", "sender": "s@school.edu", "subject": "x", "date": ""}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: meta)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": meta)
     monkeypatch.setattr(
-        sync_runner, "fetch_message_bodies", lambda email, ids: {i: "practice on Thursday" for i in ids}
+        sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids}
     )
     monkeypatch.setattr(
         sync_runner, "extract_events",
@@ -337,7 +337,7 @@ async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypat
 async def test_failed_sync_reports_failed_status(client, db, monkeypatch):
     _, token = await _user_with_token(db)
 
-    def boom(email):
+    def boom(email, provider="google"):
         raise ValueError("gmail exploded")
 
     monkeypatch.setattr(sync_runner, "fetch_recent_metadata", boom)
@@ -363,13 +363,13 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
         {"message_id": "m_bad", "sender": "a@ok.org", "subject": "Bad", "date": "Mon"},
         {"message_id": "m_good", "sender": "b@ok.org", "subject": "Good", "date": "Tue"},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email: metadata)
+    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
     monkeypatch.setattr(
         sync_runner, "fetch_message_bodies",
-        lambda email, ids: {mid: "practice on Thursday" for mid in ids},
+        lambda email, ids, provider="google": {mid: "practice on Thursday" for mid in ids},
     )
 
-    def fake_extract(body, subject, sender, message_id="", email_date=""):
+    def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         if message_id == "m_bad":
             raise RuntimeError("claude 400")
         return ExtractionResponse(
@@ -397,7 +397,7 @@ async def test_reauth_required_surfaces_clean_message(client, db, monkeypatch):
 
     _, token = await _user_with_token(db)
 
-    def needs_reauth(email):
+    def needs_reauth(email, provider="google"):
         raise ReauthRequired
 
     monkeypatch.setattr(sync_runner, "fetch_recent_metadata", needs_reauth)

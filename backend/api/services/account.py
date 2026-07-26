@@ -52,6 +52,12 @@ async def delete_account(db: AsyncSession, user: User) -> None:
 
     # With the secret-manager backend, get/delete are blocking gRPC calls —
     # keep them off the event loop, like the revoke in between.
+    # Google: revoke at Google, then delete the stored token. IMAP providers
+    # have no server-side revoke for app passwords — delete the stored secret;
+    # the frontend deletion copy tells the user to revoke the app password at
+    # their provider. Both keys are cleared best-effort to cover the
+    # provider-switch edge (a user who moved google <-> imap leaves at most
+    # one stale credential behind).
     creds = await asyncio.to_thread(token_store.get_token, user.email)
     if creds is not None:
         try:
@@ -59,3 +65,5 @@ async def delete_account(db: AsyncSession, user: User) -> None:
         except Exception as exc:  # defensive: revoke_gmail_token shouldn't raise
             _log.warning("gmail token revoke raised (%s)", type(exc).__name__)
     await asyncio.to_thread(token_store.delete_token, user.email)
+    if user.provider != "google":
+        await asyncio.to_thread(token_store.delete_token, user.email, user.provider)
