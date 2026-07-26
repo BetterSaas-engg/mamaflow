@@ -15,7 +15,7 @@ from api.services import sync_state
 from api.services.ai_extractor import extract_events
 from api.services.extraction_gate import has_extractable_signal
 from api.services.google_token import ReauthRequired
-from api.services.gmail_reader import fetch_message_bodies, fetch_recent_metadata
+from api.services.mail_reader import fetch_message_bodies, fetch_recent_metadata
 from api.services.items import (
     existing_message_ids,
     mark_message_synced,
@@ -70,7 +70,8 @@ async def run_sync_job(
                 sync_state.fail(user_id, "user not found")
                 return
 
-            metadata = await asyncio.to_thread(fetch_recent_metadata, user_email)
+            provider = user.provider
+            metadata = await asyncio.to_thread(fetch_recent_metadata, user_email, provider)
             passed, blocked = await _classify(metadata, db)
 
             # Incremental: drop already-synced messages BEFORE body fetch and
@@ -86,6 +87,7 @@ async def run_sync_job(
                 fetch_message_bodies,
                 user_email,
                 [m["message_id"] for m, _ in new_passed],
+                provider,
             )
 
             sync_state.progress(
@@ -132,6 +134,7 @@ async def run_sync_job(
                         msg["sender"],
                         msg["message_id"],
                         msg["date"],
+                        provider=provider,
                     )
                     saved = await persist_items(db, user, msg["message_id"], extraction.events)
                     items_created += len(saved)

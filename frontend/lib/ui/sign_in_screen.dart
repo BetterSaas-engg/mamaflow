@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../auth/imap_provider_configs.dart';
 import '../auth/session_controller.dart';
 import '../theme/app_logo.dart';
 import '../theme/tokens.dart';
+import 'app_password_sign_in_screen.dart';
 
 /// Shown when no session JWT is present. The single action runs the mobile
 /// Google sign-in -> backend exchange -> JWT store flow (logic unchanged).
@@ -88,6 +90,25 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                     label: const Text('Continue with Google'),
                   ),
                 ),
+                const SizedBox(height: AppSpacing.md),
+                for (final config in imapProviderConfigs) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _busy
+                          ? null
+                          : () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      AppPasswordSignInScreen(config: config),
+                                ),
+                              ),
+                      icon: Icon(config.icon),
+                      label: Text('Continue with ${config.title}'),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                ],
                 if (_error != null) ...[
                   const SizedBox(height: AppSpacing.lg),
                   Text(_error!,

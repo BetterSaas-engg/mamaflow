@@ -24,11 +24,9 @@ _REFRESH_SKEW = datetime.timedelta(seconds=120)
 _DEFAULT_LIFETIME = 3600
 
 
-class ReauthRequired(Exception):
-    """The stored credential cannot be refreshed (no refresh token, or the
-    refresh token was revoked). The user must sign in again. Carries NO detail
-    (no email, no token material) — the caller already knows the user_id and
-    logs types-only, so this exception must never smuggle PII into a traceback."""
+# Re-exported for backward compatibility — the class moved to reader_errors
+# so non-Google readers can raise the SAME exception type (multi-provider).
+from api.services.reader_errors import ReauthRequired  # noqa: F401,E402
 
 
 def _now() -> datetime.datetime:

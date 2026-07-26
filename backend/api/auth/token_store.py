@@ -1,4 +1,8 @@
-"""Gmail OAuth token storage (D4: tokens NEVER in the DB, env files, or source).
+"""Mail credential storage (D4: credentials NEVER in the DB, env files, or source).
+
+Provider-aware since the multi-provider work: Google OAuth tokens keep their
+original un-prefixed keys/secret ids (zero migration for existing users);
+IMAP app-password credentials are stored under provider-prefixed keys.
 
 Two backends behind one interface, selected by settings.token_store_backend:
   - "memory"          — process-local dict; dev/tests default (Phase 0 behavior).
@@ -27,21 +31,26 @@ class TokenStoreError(Exception):
     carries GCP internals (they stay in the chained exception for server logs)."""
 
 
+def _mem_key(user_email: str, provider: str) -> str:
+    # \x00 can't appear in either component — collision-proof join.
+    return f"{provider}\x00{user_email.strip().lower()}"
+
+
 class InMemoryTokenStore:
     def __init__(self) -> None:
         self._tokens: dict[str, dict] = {}
 
-    def store(self, user_email: str, credentials: dict) -> None:
-        self._tokens[user_email.strip().lower()] = credentials
+    def store(self, user_email: str, credentials: dict, provider: str = "google") -> None:
+        self._tokens[_mem_key(user_email, provider)] = credentials
 
-    def get(self, user_email: str) -> dict | None:
-        return self._tokens.get(user_email.strip().lower())
+    def get(self, user_email: str, provider: str = "google") -> dict | None:
+        return self._tokens.get(_mem_key(user_email, provider))
 
     def list_users(self) -> list[str]:
-        return list(self._tokens)
+        return [key.split("\x00", 1)[1] for key in self._tokens]
 
-    def delete(self, user_email: str) -> None:
-        self._tokens.pop(user_email.strip().lower(), None)
+    def delete(self, user_email: str, provider: str = "google") -> None:
+        self._tokens.pop(_mem_key(user_email, provider), None)
 
 
 def _credentials_from_env():
@@ -81,14 +90,20 @@ class SecretManagerTokenStore:
         self._cache: dict[str, dict] = {}
 
     @staticmethod
-    def secret_id_for(user_email: str) -> str:
+    def secret_id_for(user_email: str, provider: str = "google") -> str:
         digest = hashlib.sha256(user_email.strip().lower().encode()).hexdigest()
-        return f"gmail-token-{digest[:40]}"
+        if provider == "google":
+            # MUST stay byte-identical to the pre-multi-provider scheme —
+            # existing prod secrets keep working with zero migration.
+            return f"gmail-token-{digest[:40]}"
+        # Provider keys come only from the registry (validated at the auth
+        # endpoint), never raw user input — safe in a GCP resource name.
+        return f"mail-{provider}-{digest[:40]}"
 
-    def store(self, user_email: str, credentials: dict) -> None:
+    def store(self, user_email: str, credentials: dict, provider: str = "google") -> None:
         from google.api_core import exceptions as gcp_exceptions
 
-        secret_id = self.secret_id_for(user_email)
+        secret_id = self.secret_id_for(user_email, provider)
         parent = f"projects/{self._project}"
         try:
             try:
@@ -112,18 +127,18 @@ class SecretManagerTokenStore:
             # Sanitized: GCP internals stay in the chained exception (server
             # logs), never in the message callers might surface.
             raise TokenStoreError("token store write failed") from e
-        self._cache[user_email.strip().lower()] = credentials
+        self._cache[_mem_key(user_email, provider)] = credentials
 
-    def get(self, user_email: str) -> dict | None:
+    def get(self, user_email: str, provider: str = "google") -> dict | None:
         from google.api_core import exceptions as gcp_exceptions
 
-        key = user_email.strip().lower()
+        key = _mem_key(user_email, provider)
         if key in self._cache:
             return self._cache[key]
 
         name = (
             f"projects/{self._project}/secrets/"
-            f"{self.secret_id_for(user_email)}/versions/latest"
+            f"{self.secret_id_for(user_email, provider)}/versions/latest"
         )
         try:
             response = self._client.access_secret_version(request={"name": name})
@@ -139,13 +154,13 @@ class SecretManagerTokenStore:
     def list_users(self) -> list[str]:
         # Emails are hashed in secret ids by design; only cached (this-process)
         # users are listable. Nothing currently depends on a global listing.
-        return list(self._cache)
+        return [key.split("\x00", 1)[1] for key in self._cache]
 
-    def delete(self, user_email: str) -> None:
+    def delete(self, user_email: str, provider: str = "google") -> None:
         from google.api_core import exceptions as gcp_exceptions
 
-        self._cache.pop(user_email.strip().lower(), None)
-        name = f"projects/{self._project}/secrets/{self.secret_id_for(user_email)}"
+        self._cache.pop(_mem_key(user_email, provider), None)
+        name = f"projects/{self._project}/secrets/{self.secret_id_for(user_email, provider)}"
         try:
             self._client.delete_secret(request={"name": name})
         except gcp_exceptions.NotFound:
@@ -180,17 +195,45 @@ def _get_store():
     return _store
 
 
-def store_token(user_email: str, credentials: dict) -> None:
-    _get_store().store(user_email, credentials)
+def store_token(user_email: str, credentials: dict, provider: str = "google") -> None:
+    _get_store().store(user_email, credentials, provider)
 
 
-def get_token(user_email: str) -> dict | None:
-    return _get_store().get(user_email)
+def get_token(user_email: str, provider: str = "google") -> dict | None:
+    return _get_store().get(user_email, provider)
 
 
 def list_users() -> list[str]:
     return _get_store().list_users()
 
 
-def delete_token(user_email: str) -> None:
-    _get_store().delete(user_email)
+def delete_token(user_email: str, provider: str = "google") -> None:
+    _get_store().delete(user_email, provider)
+
+
+def _all_provider_keys() -> list[str]:
+    # Lazy import avoids any import-order coupling with the services layer.
+    from api.services.mail_providers import PROVIDERS
+
+    return list(PROVIDERS)
+
+
+def delete_other_tokens(user_email: str, keep_provider: str) -> None:
+    """Purge this email's stored credential under EVERY provider except the one
+    just written. Called on every successful sign-in so a user who moves
+    between providers (e.g. yahoo → google → icloud) never leaves a live app
+    password / OAuth token behind under an old provider (D4 credential
+    lifecycle). Idempotent — deleting an absent key is a no-op."""
+    store = _get_store()
+    for key in _all_provider_keys():
+        if key != keep_provider:
+            store.delete(user_email, key)
+
+
+def delete_all_tokens(user_email: str) -> None:
+    """Purge this email's credential under every known provider — used on
+    account deletion so nothing survives, regardless of which providers the
+    account passed through."""
+    store = _get_store()
+    for key in _all_provider_keys():
+        store.delete(user_email, key)

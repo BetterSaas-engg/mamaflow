@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mamaflow/auth/auth_service.dart';
 import 'package:mamaflow/auth/google_auth_codes.dart';
@@ -109,5 +110,54 @@ void main() {
 
     final captured = verify(() => api.postJson(captureAny(), any())).captured;
     expect(captured[0], '/api/v1/auth/google/web');
+  });
+
+  group('signInWithAppPassword', () {
+    test('posts provider/email/app_password, stores JWT, returns user', () async {
+      final api = _MockApi();
+      final store = _MockTokenStore();
+      when(() => api.postJson(any(), any())).thenAnswer((_) async => {
+            'access_token': 'JWTIMAP',
+            'user': {'id': 'u9', 'email': 'parent@rogers.com'},
+          });
+      when(() => store.saveJwt(any())).thenAnswer((_) async {});
+      final auth = AuthService(api, store, _FakeGoogle(_fakeCode));
+
+      final user = await auth.signInWithAppPassword(
+          provider: 'yahoo', email: 'parent@rogers.com', appPassword: 'app pass');
+
+      expect(user.email, 'parent@rogers.com');
+      final captured =
+          verify(() => api.postJson(captureAny(), captureAny())).captured;
+      expect(captured[0], '/api/v1/auth/imap');
+      expect(captured[1], {
+        'provider': 'yahoo',
+        'email': 'parent@rogers.com',
+        'app_password': 'app pass',
+      });
+      verify(() => store.saveJwt('JWTIMAP')).called(1);
+    });
+
+    test('surfaces the backend detail message on failure', () async {
+      final api = _MockApi();
+      final store = _MockTokenStore();
+      when(() => api.postJson(any(), any())).thenThrow(DioException(
+        requestOptions: RequestOptions(path: '/api/v1/auth/imap'),
+        response: Response(
+          requestOptions: RequestOptions(path: '/api/v1/auth/imap'),
+          statusCode: 401,
+          data: {'detail': 'Make sure you are using an app password.'},
+        ),
+      ));
+      final auth = AuthService(api, store, _FakeGoogle(_fakeCode));
+
+      await expectLater(
+        auth.signInWithAppPassword(
+            provider: 'yahoo', email: 'x@rogers.com', appPassword: 'bad'),
+        throwsA(isA<AuthException>().having(
+            (e) => e.message, 'message', contains('app password'))),
+      );
+      verifyNever(() => store.saveJwt(any()));
+    });
   });
 }

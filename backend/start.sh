@@ -14,4 +14,9 @@ fi
 # token-store cache is not multi-instance coherent yet).
 python -m alembic upgrade head
 
-exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1
+# --proxy-headers: Railway terminates TLS at its proxy; without this every
+# request's client IP is the proxy's, which would make the /auth/imap
+# per-IP brute-force throttle effectively global. Only the proxy can reach
+# the container, so trusting forwarded headers from any peer is safe here.
+exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 \
+  --proxy-headers --forwarded-allow-ips '*'

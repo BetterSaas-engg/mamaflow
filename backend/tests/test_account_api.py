@@ -100,11 +100,11 @@ async def test_token_store_calls_run_off_the_event_loop(client, db, monkeypatch)
         call_threads["get"] = threading.get_ident()
         return {"token": "at"}
 
-    def rec_delete(email):
+    def rec_delete_all(email):
         call_threads["delete"] = threading.get_ident()
 
     monkeypatch.setattr(account_service.token_store, "get_token", rec_get)
-    monkeypatch.setattr(account_service.token_store, "delete_token", rec_delete)
+    monkeypatch.setattr(account_service.token_store, "delete_all_tokens", rec_delete_all)
 
     resp = await client.delete("/api/v1/account", headers=_auth(token))
 
@@ -116,3 +116,22 @@ async def test_token_store_calls_run_off_the_event_loop(client, db, monkeypatch)
 async def test_delete_account_requires_auth(client):
     resp = await client.delete("/api/v1/account")
     assert resp.status_code == 401
+
+
+async def test_delete_account_purges_credentials_under_all_providers(client, db, monkeypatch):
+    """Audit BLOCK 2: an account that passed through multiple providers must
+    leave NO live credential behind on deletion — not just the current one."""
+    monkeypatch.setattr(account_service, "revoke_gmail_token", lambda creds: None)
+    user, token = await _user_with_token(db, email="switcher@icloud.com")
+    # Simulate history: a leftover Yahoo app password + the current iCloud one.
+    token_store.store_token(user.email, {"kind": "imap_app_password"}, provider="yahoo")
+    token_store.store_token(user.email, {"kind": "imap_app_password"}, provider="icloud")
+    user.provider = "icloud"
+    await db.commit()
+
+    resp = await client.delete("/api/v1/account", headers=_auth(token))
+
+    assert resp.status_code == 204
+    assert token_store.get_token(user.email, "yahoo") is None
+    assert token_store.get_token(user.email, "icloud") is None
+    assert token_store.get_token(user.email) is None  # google key too

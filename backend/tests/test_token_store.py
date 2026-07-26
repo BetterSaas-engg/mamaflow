@@ -165,11 +165,14 @@ def test_in_memory_delete_normalizes_key():
 
 
 def test_secret_manager_delete_swallows_not_found_and_evicts_cache(sm_client):
+    from api.auth.token_store import _mem_key
+
     store = _store(sm_client)
     sm_client.delete_secret.side_effect = gcp_exceptions.NotFound("absent")
-    store._cache["a@b.com"] = {"token": "x"}
+    cache_key = _mem_key("a@b.com", "google")  # cache keys are provider-scoped
+    store._cache[cache_key] = {"token": "x"}
     store.delete("a@b.com")  # NotFound swallowed -> no raise
-    assert "a@b.com" not in store._cache
+    assert cache_key not in store._cache
     assert sm_client.delete_secret.called
 
 
@@ -245,3 +248,53 @@ def test_malformed_env_json_raises_sanitized_error(monkeypatch):
     )
     with pytest.raises(TokenStoreError):
         SecretManagerTokenStore(project_id="proj-123")
+
+
+# --- Provider-aware keys (multi-provider work) ---
+
+
+def test_google_secret_id_is_byte_identical_to_legacy():
+    """Regression pin: existing prod secrets must keep working untouched."""
+    import hashlib
+
+    from api.auth.token_store import SecretManagerTokenStore
+
+    email = "parent@example.com"
+    expected = f"gmail-token-{hashlib.sha256(email.encode()).hexdigest()[:40]}"
+    assert SecretManagerTokenStore.secret_id_for(email) == expected
+    assert SecretManagerTokenStore.secret_id_for(email, "google") == expected
+
+
+def test_imap_secret_id_is_provider_prefixed():
+    import hashlib
+
+    from api.auth.token_store import SecretManagerTokenStore
+
+    email = "parent@rogers.com"
+    digest = hashlib.sha256(email.encode()).hexdigest()[:40]
+    assert SecretManagerTokenStore.secret_id_for(email, "yahoo") == f"mail-yahoo-{digest}"
+    assert SecretManagerTokenStore.secret_id_for(email, "icloud") == f"mail-icloud-{digest}"
+
+
+def test_memory_store_isolates_providers_for_same_email():
+    from api.auth.token_store import InMemoryTokenStore
+
+    store = InMemoryTokenStore()
+    store.store("parent@yahoo.com", {"kind": "google"})  # default provider
+    store.store("parent@yahoo.com", {"kind": "imap_app_password"}, provider="yahoo")
+
+    assert store.get("parent@yahoo.com")["kind"] == "google"
+    assert store.get("parent@yahoo.com", provider="yahoo")["kind"] == "imap_app_password"
+
+    store.delete("parent@yahoo.com", provider="yahoo")
+    assert store.get("parent@yahoo.com", provider="yahoo") is None
+    assert store.get("parent@yahoo.com") is not None  # google credential untouched
+
+
+def test_list_users_returns_emails_not_prefixed_keys():
+    from api.auth.token_store import InMemoryTokenStore
+
+    store = InMemoryTokenStore()
+    store.store("A@Example.com", {"t": 1})
+    store.store("b@example.com", {"t": 2}, provider="icloud")
+    assert sorted(store.list_users()) == ["a@example.com", "b@example.com"]

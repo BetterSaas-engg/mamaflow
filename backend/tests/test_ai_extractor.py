@@ -88,3 +88,24 @@ def test_invalid_tool_input_returns_empty(monkeypatch, caplog):
 
     assert out.events == []
     assert "SECRETVAL" not in caplog.text
+
+
+def test_imap_provider_items_have_no_deep_link(monkeypatch):
+    """IMAP providers have no stable web URL — the link stays None (frontend
+    only shows the open-email action when a link exists)."""
+    fake = MagicMock()
+    tool_use = MagicMock()
+    tool_use.type = "tool_use"
+    tool_use.input = {"events": [{
+        "item_type": "event", "event_title": "Practice", "action_required": None,
+        "date": "2026-08-01", "time": None, "location": None, "child_name": None,
+        "event_type": "sports", "source_sender": None, "source_email_link": None,
+    }]}
+    fake.content = [tool_use]
+    monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: fake)
+
+    out = ai_extractor.extract_events(
+        "body", "subj", "x@rogers.com", message_id="mid@rogers", provider="yahoo"
+    )
+
+    assert out.events[0].source_email_link is None

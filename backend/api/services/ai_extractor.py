@@ -14,6 +14,7 @@ import anthropic
 
 from api.config.settings import settings
 from api.schemas.family_event import ExtractionResponse
+from api.services.mail_providers import build_deep_link
 from api.services.content_wrapper import (
     _EXTRACTION_JSON_SCHEMA,
     build_extraction_prompt,
@@ -35,8 +36,6 @@ _EXTRACTION_TOOL = {
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 _log = logging.getLogger(__name__)
 
-
-_GMAIL_LINK_TEMPLATE = "https://mail.google.com/mail/u/0/#inbox/{message_id}"
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # "July 5th (Saturday)" -> "July 5": drop parentheticals + ordinal suffixes.
@@ -115,6 +114,7 @@ def extract_events(
     sender: str,
     message_id: str = "",
     email_date: str = "",
+    provider: str = "google",
 ) -> ExtractionResponse:
     """Run the full extraction pipeline on a single email.
 
@@ -153,7 +153,7 @@ def extract_events(
 
     # Normalize dates to ISO (backstop for the prompt rule) and stamp the
     # Gmail deep link — built server-side, never from Claude output.
-    link = _GMAIL_LINK_TEMPLATE.format(message_id=message_id) if message_id else None
+    link = build_deep_link(provider, message_id)
     for item in result.events:
         item.date = normalize_item_date(item.date, email_date)
         if link:

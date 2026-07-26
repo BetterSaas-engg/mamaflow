@@ -1,3 +1,5 @@
+import 'package:dio/dio.dart';
+
 import '../core/api_client.dart';
 import 'google_auth_codes.dart';
 import 'token_store.dart';
@@ -42,6 +44,47 @@ class AuthService {
       _exchangePath,
       {'code': result.code, 'code_verifier': result.codeVerifier},
     );
+
+    final jwt = resp['access_token'] as String?;
+    if (jwt == null || jwt.isEmpty) {
+      throw const AuthException('Sign-in failed: no session token returned');
+    }
+    await _tokenStore.saveJwt(jwt);
+
+    final user = (resp['user'] as Map?) ?? const {};
+    return AuthUser(
+      id: user['id'] as String? ?? '',
+      email: user['email'] as String? ?? '',
+    );
+  }
+
+  /// App-password (IMAP) sign-in: Yahoo/Rogers/iCloud. The backend verifies
+  /// the credential with a real IMAP login and keeps it server-side (D4) —
+  /// the password passes through this method's memory once and is never
+  /// stored on the device.
+  Future<AuthUser> signInWithAppPassword({
+    required String provider,
+    required String email,
+    required String appPassword,
+  }) async {
+    Map<String, dynamic> resp;
+    try {
+      resp = await _api.postJson(
+        '/api/v1/auth/imap',
+        {'provider': provider, 'email': email, 'app_password': appPassword},
+      );
+    } on DioException catch (e) {
+      // The backend's detail strings are written to be user-actionable
+      // (wrong-app-password hint, throttle, provider down) — surface them.
+      final detail = e.response?.data is Map
+          ? (e.response!.data as Map)['detail']
+          : null;
+      throw AuthException(
+        detail is String && detail.isNotEmpty
+            ? detail
+            : 'Sign-in failed. Please try again.',
+      );
+    }
 
     final jwt = resp['access_token'] as String?;
     if (jwt == null || jwt.isEmpty) {

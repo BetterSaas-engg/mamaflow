@@ -72,6 +72,12 @@
 >   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
 >      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
 >      output hardening.
+>   6. **OPEN — Android release: Google OAuth never redirects back from Chrome (2026-07-26).**
+>      Sign-in completes at Google in Chrome but the app's CallbackActivity is never invoked
+>      (release build on real device; debug/emulator worked 2026-07-04). USER deferred. Suspects:
+>      R8 stripping flutter_web_auth_2's CallbackActivity (check keep rules — same class of bug as
+>      the WorkDatabase crash fixed 2026-07-26), the reversed-client-id intent-filter in release
+>      manifest merging, or Chrome custom-tab differences on device. Repro via adb logcat.
 >   5. **✅ FIXED 2026-07-24 (code, D37) — calendar-invite emails never produced items.** Root cause
 >      (proven empirically, NOT a regression): Bookings/Teams/Google invites carry the event data
 >      only in the `text/calendar` MIME part — the body prose has no meeting date — and
@@ -325,6 +331,49 @@
 > cover machines that installed them). **USER (GitHub/Railway settings, not code):** mark the
 > three CI jobs required checks with branch protection on `main`, and enable Railway's
 > "Wait for CI" so a red `main` never deploys.
+
+> **Update 2026-07-26 — Multi-provider mail Phase 1 built (D38): IMAP app-password sign-in for
+> Yahoo/Rogers + iCloud.** No Google account required — the app-password connection IS the sign-in
+> (`POST /api/v1/auth/imap` verifies a real IMAP login, issues the same app JWT, stores the
+> credential in the token store under `mail-<provider>-<hash>`; Google keys unchanged). New
+> `users.provider` column (migration `c57ffd09b56b`), provider registry (`mail_providers.py`),
+> `imap_reader.py` (metadata-first, RFC822/ICS, UIDVALIDITY-proof), `mail_reader` dispatch facade,
+> shared `email_body.py`, brute-force `auth_throttle`, provider picker + app-password screens in the
+> app. Backend 271 tests, frontend 102; `flutter analyze` clean; security audit found 2 BLOCKs (IMAP
+> CRLF command-injection in the `/auth/imap` payload; stale app-password credentials surviving a
+> provider switch / account deletion) — **both fixed + regression-tested** (CRLF/charset validators;
+> `delete_other_tokens` on every sign-in + `delete_all_tokens` on deletion), re-audit clean. **Re-audit non-blocking follow-ups:** verify Railway's edge OVERWRITES X-Forwarded-For (start.sh uses `--forwarded-allow-ips '*'`) or pin it to Railway's egress range — else the per-IP `auth_throttle` limit is spoofable (per-email limit still bounds per-account abuse); privacy policy should note app passwords are stored encrypted server-side. Existing Google flow untouched. **USER:** (1) migration auto-applies on the
+> next Railway deploy of main; (2) strongly recommend `TOKEN_STORE_BACKEND=secret-manager` before
+> real IMAP testers (in-memory loses app passwords on restart → re-enter, like Google today);
+> (3) tester app-password instructions are in `docs/app-distribution.md`; (4) privacy policy should
+> gain a line that provider app passwords are stored encrypted server-side and used only to read
+> mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
+> `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
+
+> **Update 2026-07-26 — Android release-crash FIXED (1.0.0+2).** The first release APK crashed
+> before the splash: R8 (release-only) stripped `androidx.work.impl.WorkDatabase_Impl`, which
+> WorkManager (transitive via google_mobile_ads) creates by reflection at process start. Debug
+> never minifies → all prior testing passed. Fix: `android/app/proguard-rules.pro` keep rules +
+> wired into the release buildType; reproduced + verified on emulator (boots to sign-in, zero
+> exceptions). iOS 1.0(1) unaffected (no R8) — TestFlight build working per USER. **USER:
+> re-upload `frontend/build/app/outputs/flutter-apk/app-release.apk` (1.0.0+2) to Firebase App
+> Distribution.** Watch-out for future release features: anything reflection-based may need a
+> keep rule — test RELEASE builds, not just debug, before distributing.
+
+> **Update 2026-07-25 — Tester distribution SHIPPED both platforms (playbook: `docs/app-distribution.md`).**
+> **Android:** release signing via gitignored `android/key.properties` + user keystore
+> (`~/mamaflow-upload.jks`, SHA-1 `87:BE:6A:05:8D:17:76:24:9A:02:42:95:4A:F7:7C:9C:AC:A1:4E:43`);
+> signed `app-release.apk` built + signature-verified (CN=mama flow/Optimacore) → user uploads to
+> Firebase App Distribution. **iOS: 1.0(1) UPLOADED to App Store Connect/TestFlight** (delivery
+> `a6e98aae`). Apple setup done along the way: App ID `com.bettersaas.mamaflow.mamaflow` with Push;
+> **APNs key `U9L2457D7N` uploaded to Firebase (dev+prod)** — Apple side of Track B push is DONE
+> (backend still dark until `FIREBASE_CREDENTIALS_JSON` on Railway); ASC app record created;
+> Sabiran (`sabiranthapa@icloud.com`) is team Admin. Signing gotcha solved: fresh team has zero
+> devices → automatic archive signing impossible; releases use **manual Apple Distribution signing
+> minted via the ASC API key `mamaflow-ci`/`A76YMZ8L97`** (cert+profile+build keychain on the build
+> Mac — full per-release commands in the playbook). **USER remaining:** TestFlight export-compliance
+> answer (standard HTTPS) + add internal testers; upload the Android APK to Firebase App
+> Distribution if not yet done; back up keystore/.p8s/API key per the storage scheme.
 
 > **Update 2026-07-22 — Domain + Apple Developer acquired.** USER purchased **themamaflow.com**
 > and enrolled in the **Apple Developer Program**. Landing CTA now points at

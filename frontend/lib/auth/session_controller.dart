@@ -18,6 +18,22 @@ class SessionController extends AsyncNotifier<bool> {
     return user;
   }
 
+  /// App-password (IMAP) sign-in — Yahoo/Rogers/iCloud. Throws AuthException
+  /// with a user-actionable message on failure.
+  Future<AuthUser> signInWithAppPassword({
+    required String provider,
+    required String email,
+    required String appPassword,
+  }) async {
+    final user = await ref.read(authServiceProvider).signInWithAppPassword(
+          provider: provider,
+          email: email,
+          appPassword: appPassword,
+        );
+    state = const AsyncData(true);
+    return user;
+  }
+
   Future<void> signOut() async {
     // Unregister push first — the call needs the JWT that signOut() clears.
     await ref.read(pushServiceProvider).stop();
