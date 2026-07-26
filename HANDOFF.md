@@ -350,6 +350,18 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-26 — Multi-provider LIVE in prod + 1.0.0+3 distribution builds.** PR #17 merged;
+> Railway deployed and **verified live** (`/api/v1/auth/imap` serving ⇒ the container started after
+> `alembic upgrade head`, so the `users.provider` migration `c57ffd09b56b` applied). **Caught a
+> stale-artifact trap:** the Android 1.0.0+2 APK and iOS 1.0(1) TestFlight build both PREDATE the
+> multi-provider merge (no provider picker) — rebuilt both at **1.0.0+3**. Android APK verified on
+> emulator (release build, versionCode 3, release-signed): boots clean, **provider picker renders
+> Google/Yahoo/Rogers/iCloud**, Rogers app-password screen renders with its Yahoo-specific steps +
+> deep link; **zero FATAL exceptions** (R8 fix holds). **USER: upload
+> `frontend/build/app/outputs/flutter-apk/app-release.apk` (1.0.0+3) to Firebase App Distribution.**
+> **Release rule learned:** always rebuild distribution artifacts AFTER a feature merge and launch
+> the RELEASE build once before distributing (debug never minifies — see the R8 crash).
+
 > **Update 2026-07-26 — Android release-crash FIXED (1.0.0+2).** The first release APK crashed
 > before the splash: R8 (release-only) stripped `androidx.work.impl.WorkDatabase_Impl`, which
 > WorkManager (transitive via google_mobile_ads) creates by reflection at process start. Debug
