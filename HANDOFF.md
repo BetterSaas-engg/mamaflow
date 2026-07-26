@@ -72,6 +72,12 @@
 >   3. Pre-existing (audit note): `ai_extractor` logs a 200-char raw_text snippet on JSON-parse
 >      failure — arguably violates the types-only log rule; clean up with the tool-use/structured-
 >      output hardening.
+>   6. **OPEN — Android release: Google OAuth never redirects back from Chrome (2026-07-26).**
+>      Sign-in completes at Google in Chrome but the app's CallbackActivity is never invoked
+>      (release build on real device; debug/emulator worked 2026-07-04). USER deferred. Suspects:
+>      R8 stripping flutter_web_auth_2's CallbackActivity (check keep rules — same class of bug as
+>      the WorkDatabase crash fixed 2026-07-26), the reversed-client-id intent-filter in release
+>      manifest merging, or Chrome custom-tab differences on device. Repro via adb logcat.
 >   5. **✅ FIXED 2026-07-24 (code, D37) — calendar-invite emails never produced items.** Root cause
 >      (proven empirically, NOT a regression): Bookings/Teams/Google invites carry the event data
 >      only in the `text/calendar` MIME part — the body prose has no meeting date — and
