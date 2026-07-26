@@ -118,6 +118,11 @@ async def google_callback(request: Request):
         "client_secret": credentials.client_secret,
         "scopes": list(credentials.scopes),
     })
+    # Same one-active-source invariant as the mobile/web sign-ins: purge any
+    # credential this email holds under another provider (D4 lifecycle). This
+    # legacy dev/verification route isn't in the app's login UX, but it still
+    # writes a Google token, so it must honor the invariant too.
+    await asyncio.to_thread(delete_other_tokens, user_email, "google")
 
     return WebCallbackResponse(message="OAuth successful", email=user_email)
 
