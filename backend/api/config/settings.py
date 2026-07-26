@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Min seconds between completed syncs per user (each sync = a full 30-day
     # metadata scan; repeated triggers are a cost/DoS vector — A2 audit).
     sync_cooldown_seconds: int = 60
+    # IMAP providers (Yahoo/Rogers, iCloud): socket timeout for connect/login/
+    # fetch. Must stay under the frontend's 30s Dio timeout with headroom.
+    imap_timeout_seconds: int = 25
     # Push reminders (Track B). Inert unless firebase_credentials_json is set
     # (the FCM service-account JSON — a credential, env only, never the DB).
     firebase_credentials_json: str = ""
