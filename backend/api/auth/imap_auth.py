@@ -64,9 +64,12 @@ class ImapAuthRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def _valid_email(cls, v: str) -> str:
-        if not _EMAIL_RE.match(v.strip()):
+        cleaned = v.strip()
+        if not _EMAIL_RE.match(cleaned):
             raise ValueError("invalid email address")
-        return v
+        # Return the validated (stripped) value so no outer whitespace/CRLF can
+        # survive to imaplib, rather than relying on a later normalize step.
+        return cleaned
 
     @field_validator("app_password")
     @classmethod

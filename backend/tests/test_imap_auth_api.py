@@ -195,3 +195,21 @@ async def test_switching_between_imap_providers_purges_the_old_one(client, db):
 
     assert get_token("p@icloud.com", "yahoo") is not None
     assert get_token("p@icloud.com", "icloud") is None
+
+
+async def test_trailing_newline_in_email_is_stripped_or_rejected(client, db):
+    """Belt-and-suspenders for BLOCK 1: a trailing CR/LF on the email must
+    never survive to the stored username / imaplib login."""
+    from api.auth.token_store import get_token
+
+    resp = await client.post(
+        "/api/v1/auth/imap", json=_payload(email="clean@rogers.com\r\n")
+    )
+    # Either rejected outright, or accepted with a fully stripped identity —
+    # never stored with an embedded newline.
+    if resp.status_code == 200:
+        cred = get_token("clean@rogers.com", "yahoo")
+        assert cred is not None
+        assert "\r" not in cred["username"] and "\n" not in cred["username"]
+    else:
+        assert resp.status_code == 422
