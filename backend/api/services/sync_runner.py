@@ -107,6 +107,11 @@ async def run_sync_job(
 
             items_created = 0
             gate_skipped = 0
+            # How many of new_passed we actually got through. Before the budget
+            # / circuit-breaker breaks existed this was always len(new_passed);
+            # now the loop can end early, and reporting the full count would
+            # tell the client "done, all processed" when most were never tried.
+            processed = 0
             # Cost telemetry (counts only — audit-safe). Extraction spend was
             # invisible before this; these totals are the per-sync baseline.
             calls = 0
@@ -238,11 +243,12 @@ async def run_sync_job(
                             break
                     else:
                         consecutive_failures = 0
+                processed = _i + 1
                 sync_state.progress(
                     user_id,
                     messages_scanned=len(metadata),
                     to_process=len(new_passed),
-                    processed=_i + 1,
+                    processed=processed,
                     items_created=items_created,
                 )
 
@@ -268,7 +274,10 @@ async def run_sync_job(
                 user_id,
                 messages_scanned=len(metadata),
                 blocked=len(blocked),
-                processed=len(new_passed),
+                # Actual, not len(new_passed) — a budget/breaker abort leaves
+                # the remainder untried and the client must not be told
+                # otherwise (they are retried next sync).
+                processed=processed,
                 items_created=items_created,
             )
     except ReauthRequired:

@@ -175,3 +175,60 @@ async def test_daily_budget_caps_runaway_spend(client, db, monkeypatch):
     await client.post("/api/v1/sync", headers=_auth(token))
 
     assert len(calls) == 3  # budget stops the run mid-batch
+
+
+# --- Audit follow-ups (2026-07-27 security review) ---
+
+
+async def test_early_abort_does_not_report_full_completion(client, db, monkeypatch):
+    """An abort leaves the remainder untried; telling the client 'processed:
+    all of them' would be a lie (they are retried next sync)."""
+    _, token = await _user_with_token(db)
+    monkeypatch.setattr(app_settings, "extraction_daily_call_budget", 2)
+
+    def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
+        return ExtractionResponse(events=[]), ExtractionUsage(input_tokens=5, output_tokens=1)
+
+    _wire(monkeypatch, [f"m{i}" for i in range(6)], fake_extract)
+
+    await client.post("/api/v1/sync", headers=_auth(token))
+    status = (await client.get("/api/v1/sync/status", headers=_auth(token))).json()
+
+    # Only the 2 that fit the budget were attempted — previously this reported
+    # 6, claiming work that never happened. (finish() mirrors to_process to
+    # processed; the untried 4 are simply picked up by the next sync.)
+    assert status["processed"] == 2
+
+
+async def test_reset_reopens_given_up_messages_but_not_successes(client, db, monkeypatch):
+    """Recovery path for a SYSTEMIC fault misclassified as permanent — without
+    it, a bad deploy would blacklist every message it touched, forever."""
+    from api.db import reset_failed_messages as reset_mod
+    from api.services.items import existing_message_ids, mark_message_synced, record_message_failure
+
+    user, _ = await _user_with_token(db)
+    await mark_message_synced(db, user.id, "ok1")                     # success
+    await record_message_failure(db, user.id, "bad1", "permanent")    # give-up
+
+    assert await existing_message_ids(db, user.id, ["ok1", "bad1"]) == {"ok1", "bad1"}
+
+    # The script opens its own session; point it at the test session factory.
+    monkeypatch.setattr(reset_mod, "AsyncSessionLocal", lambda: _Ctx(db))
+    cleared = await reset_mod.reset_failed_messages(kind="permanent")
+
+    assert cleared == 1
+    # The give-up is eligible again; the success is untouched (never re-billed).
+    assert await existing_message_ids(db, user.id, ["ok1", "bad1"]) == {"ok1"}
+
+
+class _Ctx:
+    """Async-context wrapper so the script can use the test's session."""
+
+    def __init__(self, db):
+        self._db = db
+
+    async def __aenter__(self):
+        return self._db
+
+    async def __aexit__(self, *exc):
+        return False
