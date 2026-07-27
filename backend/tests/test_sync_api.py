@@ -17,7 +17,16 @@ from api.auth.jwt import create_access_token
 from api.models.sender_blocklist import SenderBlocklist
 from api.schemas.family_event import ExtractionResponse, FamilyItem
 from api.services import sync_runner
+from api.services.ai_extractor import ExtractionUsage
 from api.services.users import get_or_create_user
+
+
+def _extraction(*events):
+    """extract_events returns (result, usage) since the cost-instrumentation
+    change; test fakes must match that contract."""
+    return ExtractionResponse(events=list(events)), ExtractionUsage(
+        input_tokens=100, output_tokens=10, model="test-model"
+    )
 
 
 def _auth(token):
@@ -71,8 +80,8 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", fake_bodies)
     monkeypatch.setattr(
         sync_runner, "extract_events",
-        lambda body, subject, sender, message_id="", email_date="", provider="google": ExtractionResponse(
-            events=[FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")]
+        lambda body, subject, sender, message_id="", email_date="", provider="google": _extraction(
+            FamilyItem(item_type="event", event_title="Soccer", date="2026-06-20")
         ),
     )
 
@@ -113,7 +122,7 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
 
     def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
-        return ExtractionResponse(events=[FamilyItem(item_type="event", event_title="X")])
+        return _extraction(FamilyItem(item_type="event", event_title="X"))
 
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", fake_bodies)
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
@@ -148,7 +157,7 @@ async def test_resync_skips_zero_event_messages(client, db, monkeypatch):
 
     def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
-        return ExtractionResponse(events=[])  # newsletter: nothing extractable
+        return _extraction()  # newsletter: nothing extractable
 
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids})
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
@@ -184,7 +193,7 @@ async def test_gated_email_never_reaches_claude_and_stays_skipped(client, db, mo
 
     def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         extract_calls.append(message_id)
-        return ExtractionResponse(events=[])
+        return _extraction()
 
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
@@ -215,7 +224,7 @@ async def test_failed_extraction_is_retried_next_sync(client, db, monkeypatch):
         extract_calls.append(message_id)
         if len(extract_calls) == 1:
             raise RuntimeError("transient API error")
-        return ExtractionResponse(events=[])
+        return _extraction()
 
     monkeypatch.setattr(sync_runner, "extract_events", flaky_extract)
 
@@ -284,7 +293,7 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
 
     def fake_extract(*args, **kwargs):
         seen.append(sync_state.get_state(user.id).processed)
-        return ExtractionResponse(events=[FamilyItem(item_type="action", action_required="do")])
+        return _extraction(FamilyItem(item_type="action", action_required="do"))
 
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)
 
@@ -316,7 +325,7 @@ async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypat
     )
     monkeypatch.setattr(
         sync_runner, "extract_events",
-        lambda *a, **k: ExtractionResponse(events=[]),
+        lambda *a, **k: _extraction(),
     )
 
     redact_threads = []
@@ -372,8 +381,8 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
     def fake_extract(body, subject, sender, message_id="", email_date="", provider="google"):
         if message_id == "m_bad":
             raise RuntimeError("claude 400")
-        return ExtractionResponse(
-            events=[FamilyItem(item_type="event", event_title="Kept", date="2026-07-16")]
+        return _extraction(
+            FamilyItem(item_type="event", event_title="Kept", date="2026-07-16")
         )
 
     monkeypatch.setattr(sync_runner, "extract_events", fake_extract)

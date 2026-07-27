@@ -1,8 +1,11 @@
 """Persist and query extracted items, scoped to a user."""
 
-from sqlalchemy import select
+import datetime
+
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config.settings import settings
 from api.models.item import Item
 from api.models.synced_message import SyncedMessage
 from api.models.user import User
@@ -23,6 +26,11 @@ async def existing_message_ids(
     carries a `synced_messages` marker (written for zero-event mail). Querying
     both keeps pre-marker items recognized while stopping the re-extraction of
     emails that legitimately yield no events.
+
+    A marker for a message that FAILED only counts once we've given up on it
+    (attempts >= EXTRACTION_MAX_ATTEMPTS). An in-flight retry stays eligible,
+    so genuine transient faults still get their retries — but a hopeless
+    message stops being fetched and re-sent forever.
     """
     if not message_ids:
         return set()
@@ -38,9 +46,24 @@ async def existing_message_ids(
             SyncedMessage.user_id == user_id,
             SyncedMessage.source_message_id.in_(message_ids),
             SyncedMessage.deleted_at.is_(None),
+            or_(
+                SyncedMessage.failure_kind.is_(None),  # succeeded / gate-skipped
+                SyncedMessage.attempts >= settings.extraction_max_attempts,
+            ),
         )
     )
     return {row[0] for row in item_rows} | {row[0] for row in marker_rows}
+
+
+async def _get_marker(db: AsyncSession, user_id, message_id: str) -> SyncedMessage | None:
+    result = await db.execute(
+        select(SyncedMessage).where(
+            SyncedMessage.user_id == user_id,
+            SyncedMessage.source_message_id == message_id,
+            SyncedMessage.deleted_at.is_(None),
+        ).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def mark_message_synced(
@@ -50,19 +73,43 @@ async def mark_message_synced(
 ) -> None:
     """Record that a message was successfully extracted (even with zero events)
     so incremental sync never re-sends it to Claude. Idempotent per
-    (user, message); call only after a successful extraction — a failed one
-    must leave no marker so the next sync retries it."""
-    existing = await db.execute(
-        select(SyncedMessage.id).where(
-            SyncedMessage.user_id == user_id,
-            SyncedMessage.source_message_id == message_id,
-            SyncedMessage.deleted_at.is_(None),
-        ).limit(1)
-    )
-    if existing.first() is not None:
+    (user, message); call only after a successful extraction.
+
+    A message that previously failed and later succeeds has its failure state
+    cleared — success is the terminal state, not the failure count."""
+    existing = await _get_marker(db, user_id, message_id)
+    if existing is not None:
+        if existing.failure_kind is not None:
+            existing.failure_kind = None
+            await db.commit()
         return
     db.add(SyncedMessage(user_id=user_id, source_message_id=message_id))
     await db.commit()
+
+
+async def record_message_failure(
+    db: AsyncSession,
+    user_id,
+    message_id: str,
+    kind: str,
+) -> int:
+    """Record a failed extraction attempt; returns the new attempt count.
+
+    kind is "permanent" (a 400/validation error — retrying cannot succeed, so
+    burn the whole budget at once) or "transient" (rate limit, 5xx, DB blip —
+    worth another try next sync). Without this, every failure was retried
+    hourly forever at full price.
+    """
+    marker = await _get_marker(db, user_id, message_id)
+    max_attempts = settings.extraction_max_attempts
+    if marker is None:
+        marker = SyncedMessage(user_id=user_id, source_message_id=message_id, attempts=0)
+        db.add(marker)
+    marker.attempts = max_attempts if kind == "permanent" else (marker.attempts or 0) + 1
+    marker.failure_kind = kind
+    marker.last_attempt_at = datetime.datetime.now(datetime.timezone.utc)
+    await db.commit()
+    return marker.attempts
 
 
 async def persist_items(

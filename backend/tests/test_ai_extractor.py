@@ -55,7 +55,7 @@ def test_parses_tool_input_and_stamps_link(monkeypatch):
         ),
     )
 
-    out = ai_extractor.extract_events("b", "s", "x@y.com", message_id="abc123")
+    out, _ = ai_extractor.extract_events("b", "s", "x@y.com", message_id="abc123")
 
     assert out.events[0].event_title == "Soccer"
     # Stamped server-side from message_id — NEVER from Claude output.
@@ -70,7 +70,7 @@ def test_no_tool_use_block_returns_empty_and_logs_no_content(monkeypatch, caplog
     )
 
     with caplog.at_level("WARNING"):
-        out = ai_extractor.extract_events("b", "s", "x@y.com")
+        out, _ = ai_extractor.extract_events("b", "s", "x@y.com")
 
     assert out.events == []
     # Audit rule: types only, never values — model text must not reach logs.
@@ -84,7 +84,7 @@ def test_invalid_tool_input_returns_empty(monkeypatch, caplog):
     )
 
     with caplog.at_level("WARNING"):
-        out = ai_extractor.extract_events("b", "s", "x@y.com")
+        out, _ = ai_extractor.extract_events("b", "s", "x@y.com")
 
     assert out.events == []
     assert "SECRETVAL" not in caplog.text
@@ -104,8 +104,52 @@ def test_imap_provider_items_have_no_deep_link(monkeypatch):
     fake.content = [tool_use]
     monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: fake)
 
-    out = ai_extractor.extract_events(
+    out, _ = ai_extractor.extract_events(
         "body", "subj", "x@rogers.com", message_id="mid@rogers", provider="yahoo"
     )
 
     assert out.events[0].source_email_link is None
+
+
+# --- Cost instrumentation: usage must be captured, and stay content-free ---
+
+
+def test_usage_is_captured_from_the_response(monkeypatch):
+    """Extraction spend was invisible before this; the caller needs real counts
+    to aggregate per sync."""
+    resp = _tool_use_response({"events": []})
+    resp.usage.input_tokens = 2345
+    resp.usage.output_tokens = 60
+    monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: resp)
+
+    _, usage = ai_extractor.extract_events("a body", "subj", "x@y.com")
+
+    assert usage.input_tokens == 2345
+    assert usage.output_tokens == 60
+    assert usage.model == ai_extractor.settings.extraction_model
+    assert usage.body_chars == len("a body")
+
+
+def test_usage_degrades_to_zeros_when_the_sdk_omits_it(monkeypatch):
+    """A missing/odd usage block must never fail an otherwise-good extraction."""
+    resp = _tool_use_response({"events": []})
+    del resp.usage  # MagicMock without the attribute
+    monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: resp)
+
+    result, usage = ai_extractor.extract_events("b", "s", "x@y.com")
+
+    assert result.events == []
+    assert usage.input_tokens == 0 and usage.output_tokens == 0
+
+
+def test_usage_carries_no_content(monkeypatch):
+    """Audit rule: counts are fine, content is not — nothing token-bearing may
+    ride along in the telemetry object."""
+    resp = _tool_use_response({"events": []})
+    resp.usage.input_tokens = 10
+    resp.usage.output_tokens = 2
+    monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: resp)
+
+    _, usage = ai_extractor.extract_events("SECRET-CONTENT body", "SECRET-SUBJ", "x@y.com")
+
+    assert "SECRET" not in repr(usage)
