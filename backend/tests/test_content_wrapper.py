@@ -129,7 +129,13 @@ def test_subject_injection_escaped():
 def test_extraction_prompt_security_framing():
     """The extraction prompt must contain all three defensive elements:
     (1) untrusted data declaration, (2) ignore-instructions directive,
-    (3) locked JSON output schema."""
+    (3) a locked output format.
+
+    (3) is now enforced by the TOOL (`strict: True` + `input_schema`,
+    asserted in test_ai_extractor.py::test_forces_strict_tool_choice) rather
+    than by dumping the schema into the prose — the prompt only has to direct
+    the model to that tool. The defense is unchanged; its assertion moved to
+    the layer that actually enforces it."""
     wrapped, nonce = wrap_untrusted_content("test", "test", "a@b.com")
     prompt = build_extraction_prompt(wrapped, nonce)
 
@@ -141,9 +147,8 @@ def test_extraction_prompt_security_framing():
     assert "IGNORE" in prompt
     assert "prompt injection" in prompt.lower()
 
-    # (3) Locked JSON schema with required fields
-    assert '"event_title"' in prompt
-    assert '"additionalProperties": false' in prompt
+    # (3) Output is locked to the schema-bound tool
+    assert "record_family_items" in prompt
     assert "Output valid JSON only" in prompt
 
 
@@ -155,3 +160,40 @@ def test_escape_delimiters_function():
     assert _escape_delimiters("<<<hello>>>") == "\u2039\u2039\u2039hello>>>"
     assert _escape_delimiters("<<<a<<<b") == "\u2039\u2039\u2039a\u2039\u2039\u2039b"
     assert _escape_delimiters("") == ""
+
+
+# --- Prompt cost: the schema is carried by the tool, not repeated as prose ---
+
+
+def _prompt():
+    wrapped, nonce = wrap_untrusted_content("body", "subj", "a@b.org")
+    return build_extraction_prompt(wrapped, nonce)
+
+
+def test_prompt_does_not_repeat_the_json_schema():
+    """`strict: True` + the tool's input_schema enforce the shape server-side;
+    dumping the schema into the prose too cost ~600 tokens on every call."""
+    prompt = _prompt()
+    assert "additionalProperties" not in prompt
+    assert "anyOf" not in prompt
+    assert '"type": "object"' not in prompt
+
+
+def test_prompt_keeps_the_semantic_rules_the_schema_cannot_express():
+    """These are load-bearing (D34 event_type vocabulary, D37 ISO dates) and
+    must survive the schema-dump removal."""
+    prompt = _prompt()
+    assert "ISO format YYYY-MM-DD" in prompt
+    assert '"event" or "action"' in prompt
+    for value in ("school", "medical", "sports", "playdate",
+                  "camp", "birthday", "recital", "other"):
+        assert value in prompt
+    assert "source_email_link" in prompt
+    assert "Calendar invite details" in prompt  # D37 authority rule
+
+
+def test_prompt_stays_within_budget():
+    """Every character here is billed on EVERY extraction, forever. The prompt
+    grew at D34 and again at D37; this makes further growth a conscious act.
+    Raise deliberately if a new rule genuinely earns its tokens."""
+    assert len(_prompt()) < 3_800
