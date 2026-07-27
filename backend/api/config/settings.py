@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     # default ($1/$5 per MTok vs Sonnet's $3/$15 — ~3x cheaper). Flip to
     # EXTRACTION_MODEL=claude-sonnet-4-6 if accuracy on messy emails dips.
     extraction_model: str = "claude-haiku-4-5"
+    # Cost controls. A message whose extraction keeps failing used to be
+    # re-sent to Claude every hour for up to 30 days; give up after N tries
+    # (hourly ticks => N hours of grace, ample for any transient fault).
+    extraction_max_attempts: int = 3
+    # Abort a sync run after this many CONSECUTIVE transient failures — a
+    # Claude outage otherwise burns 50 failed calls per user per tick.
+    extraction_failure_breaker: int = 5
+    # Hard per-user daily ceiling on extraction calls. Structurally caps the
+    # blast radius of any future runaway, including ones we haven't imagined.
+    extraction_daily_call_budget: int = 200
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on

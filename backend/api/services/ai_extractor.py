@@ -109,6 +109,33 @@ def normalize_item_date(value: str | None, email_date: str = "") -> str | None:
     return value
 
 
+# Account-level faults: retrying per-message is pointless and expensive (a bad
+# key would burn the whole batch into a wall). The caller aborts the run.
+FATAL_EXTRACTION_ERRORS: tuple[type[BaseException], ...] = (
+    anthropic.AuthenticationError,
+    anthropic.PermissionDeniedError,
+)
+
+# Hopeless for THIS message — the same input will fail identically forever
+# (e.g. the 2026-07-15 invalid-tool-schema incident). Give up immediately
+# rather than paying for it hourly.
+_PERMANENT_EXTRACTION_ERRORS: tuple[type[BaseException], ...] = (
+    anthropic.BadRequestError,
+    anthropic.UnprocessableEntityError,
+)
+
+
+def classify_extraction_failure(exc: BaseException) -> str:
+    """"permanent" (never retry) or "transient" (retry, bounded).
+
+    Default is "transient": an unknown fault is more likely a blip than a
+    permanent defect, and the attempt counter bounds the cost either way.
+    """
+    if isinstance(exc, _PERMANENT_EXTRACTION_ERRORS):
+        return "permanent"
+    return "transient"
+
+
 @dataclasses.dataclass(frozen=True)
 class ExtractionUsage:
     """Per-call telemetry. Integers + the model id only — no content, so it is

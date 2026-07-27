@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from api.config.settings import settings
 from api.models.user import User
 from api.services import sync_state
-from api.services.ai_extractor import extract_events
+from api.services.ai_extractor import (
+    FATAL_EXTRACTION_ERRORS,
+    classify_extraction_failure,
+    extract_events,
+)
+from api.services.extraction_budget import has_budget, record_call
 from api.services.extraction_gate import has_extractable_signal
 from api.services.google_token import ReauthRequired
 from api.services.mail_reader import fetch_message_bodies, fetch_recent_metadata
@@ -21,6 +26,7 @@ from api.services.items import (
     existing_message_ids,
     mark_message_synced,
     persist_items,
+    record_message_failure,
 )
 from api.services.privacy_pipeline import redact_pii
 from api.services.sender_blocklist import is_blocked_sender
@@ -106,6 +112,9 @@ async def run_sync_job(
             calls = 0
             input_tokens = 0
             output_tokens = 0
+            give_ups = 0
+            consecutive_failures = 0
+            budget_exhausted = False
             for _i, (msg, _status) in enumerate(new_passed):
                 # Per-message isolation: a redaction/extraction failure (e.g.
                 # a transient Claude API error) skips THIS message and keeps
@@ -130,6 +139,18 @@ async def run_sync_job(
                             items_created=items_created,
                         )
                         continue
+                    # Hard daily ceiling per user — the backstop against a
+                    # runaway we haven't imagined yet. Checked before the
+                    # spend, so it caps mid-run rather than after the fact.
+                    if not await has_budget(db, user_id):
+                        budget_exhausted = True
+                        _log.warning(
+                            "sync: daily extraction budget exhausted for user %s "
+                            "(%d calls); deferring the rest to tomorrow",
+                            user_id,
+                            settings.extraction_daily_call_budget,
+                        )
+                        break
                     # Presidio is CPU-bound spaCy analysis — off the loop, or
                     # every concurrent request stalls for the whole sync.
                     redaction = await asyncio.to_thread(redact_pii, body)
@@ -145,29 +166,78 @@ async def run_sync_job(
                     calls += 1
                     input_tokens += usage.input_tokens
                     output_tokens += usage.output_tokens
+                    await record_call(
+                        db, user_id, usage.input_tokens, usage.output_tokens
+                    )
                     saved = await persist_items(db, user, msg["message_id"], extraction.events)
                     items_created += len(saved)
                     # Mark processed AFTER a successful extraction — even when it
                     # yielded zero events — so this message is never re-sent to
-                    # Claude. A failed extraction throws before here, writes no
-                    # marker, and is retried next sync (per the isolation note).
+                    # Claude. A failed extraction throws before here (see the
+                    # handler: it records a bounded failure instead).
                     await mark_message_synced(db, user_id, msg["message_id"])
+                    consecutive_failures = 0
+                except FATAL_EXTRACTION_ERRORS:
+                    # Account-level, not message-level (bad/blocked API key).
+                    # Retrying every message would burn the whole batch into a
+                    # wall, so fail the run and let the outer handler report it.
+                    raise
                 except Exception as exc:
+                    kind = classify_extraction_failure(exc)
                     # Types only — never message content (audit log rule).
                     _log.warning(
-                        "sync: skipping one message for user %s (%s)",
+                        "sync: message failed for user %s (%s, %s)",
                         user_id,
                         type(exc).__name__,
+                        kind,
                     )
                     # A failed flush/commit leaves the session needing a
                     # rollback; without it every later message would fail too.
                     await db.rollback()
+                    # Bound the retry: without a counter a permanently-failing
+                    # message was re-sent to Claude every hour for up to 30
+                    # days. Accounting must never kill the loop, hence its own
+                    # try/except.
+                    try:
+                        attempts = await record_message_failure(
+                            db, user_id, msg["message_id"], kind
+                        )
+                        if attempts >= settings.extraction_max_attempts:
+                            give_ups += 1
+                            _log.warning(
+                                "sync: giving up on a message for user %s "
+                                "after %d attempts (%s)",
+                                user_id,
+                                attempts,
+                                kind,
+                            )
+                    except Exception as rec_exc:
+                        _log.warning(
+                            "sync: could not record failure for user %s (%s)",
+                            user_id,
+                            type(rec_exc).__name__,
+                        )
+                        await db.rollback()
                     # rollback() expires loaded instances — re-fetch the user
                     # so later iterations don't lazy-refresh in async context
                     # (MissingGreenlet, the reminder-engine Critical's twin).
                     user = await db.get(User, user_id)
                     if user is None:
                         break
+                    if kind == "transient":
+                        consecutive_failures += 1
+                        if consecutive_failures >= settings.extraction_failure_breaker:
+                            # A provider outage would otherwise cost a full
+                            # batch of failed calls per user, every tick.
+                            _log.warning(
+                                "sync: aborting run for user %s after %d "
+                                "consecutive transient failures",
+                                user_id,
+                                consecutive_failures,
+                            )
+                            break
+                    else:
+                        consecutive_failures = 0
                 sync_state.progress(
                     user_id,
                     messages_scanned=len(metadata),
@@ -182,7 +252,7 @@ async def run_sync_job(
             # flip to a pricier tier attributable from one grep.
             _log.info(
                 "sync: user=%s model=%s calls=%d gate_skipped=%d to_process=%d "
-                "in_tok=%d out_tok=%d items=%d",
+                "in_tok=%d out_tok=%d items=%d give_ups=%d budget_exhausted=%s",
                 user_id,
                 settings.extraction_model,
                 calls,
@@ -191,6 +261,8 @@ async def run_sync_job(
                 input_tokens,
                 output_tokens,
                 items_created,
+                give_ups,
+                budget_exhausted,
             )
             sync_state.finish(
                 user_id,
