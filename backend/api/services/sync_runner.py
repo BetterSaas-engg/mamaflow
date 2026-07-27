@@ -10,6 +10,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.config.settings import settings
 from api.models.user import User
 from api.services import sync_state
 from api.services.ai_extractor import extract_events
@@ -100,6 +101,11 @@ async def run_sync_job(
 
             items_created = 0
             gate_skipped = 0
+            # Cost telemetry (counts only — audit-safe). Extraction spend was
+            # invisible before this; these totals are the per-sync baseline.
+            calls = 0
+            input_tokens = 0
+            output_tokens = 0
             for _i, (msg, _status) in enumerate(new_passed):
                 # Per-message isolation: a redaction/extraction failure (e.g.
                 # a transient Claude API error) skips THIS message and keeps
@@ -127,7 +133,7 @@ async def run_sync_job(
                     # Presidio is CPU-bound spaCy analysis — off the loop, or
                     # every concurrent request stalls for the whole sync.
                     redaction = await asyncio.to_thread(redact_pii, body)
-                    extraction = await asyncio.to_thread(
+                    extraction, usage = await asyncio.to_thread(
                         extract_events,
                         redaction.redacted_text,
                         msg["subject"],
@@ -136,6 +142,9 @@ async def run_sync_job(
                         msg["date"],
                         provider=provider,
                     )
+                    calls += 1
+                    input_tokens += usage.input_tokens
+                    output_tokens += usage.output_tokens
                     saved = await persist_items(db, user, msg["message_id"], extraction.events)
                     items_created += len(saved)
                     # Mark processed AFTER a successful extraction — even when it
@@ -167,14 +176,22 @@ async def run_sync_job(
                     items_created=items_created,
                 )
 
-            if gate_skipped:
-                # Counts only, never content (audit log rule).
-                _log.info(
-                    "sync: gate skipped %d/%d messages for user %s",
-                    gate_skipped,
-                    len(new_passed),
-                    user_id,
-                )
+            # Per-sync cost summary — counts + the model id only (audit rule:
+            # token COUNTS are integers, never token-bearing text). `model` is
+            # deliberately included: it makes an accidental EXTRACTION_MODEL
+            # flip to a pricier tier attributable from one grep.
+            _log.info(
+                "sync: user=%s model=%s calls=%d gate_skipped=%d to_process=%d "
+                "in_tok=%d out_tok=%d items=%d",
+                user_id,
+                settings.extraction_model,
+                calls,
+                gate_skipped,
+                len(new_passed),
+                input_tokens,
+                output_tokens,
+                items_created,
+            )
             sync_state.finish(
                 user_id,
                 messages_scanned=len(metadata),

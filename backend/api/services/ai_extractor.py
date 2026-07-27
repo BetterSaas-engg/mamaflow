@@ -5,6 +5,7 @@ defenses, sends it to Claude, and parses the response into
 structured FamilyEvent objects.
 """
 
+import dataclasses
 import datetime
 import email.utils
 import logging
@@ -108,6 +109,32 @@ def normalize_item_date(value: str | None, email_date: str = "") -> str | None:
     return value
 
 
+@dataclasses.dataclass(frozen=True)
+class ExtractionUsage:
+    """Per-call telemetry. Integers + the model id only — no content, so it is
+    safe to log under the types-only rule (token COUNTS are not token-bearing
+    text). Used to measure extraction cost, which was previously invisible."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+    body_chars: int = 0
+
+
+def _usage_from(message, model: str, body_chars: int) -> ExtractionUsage:
+    """Read usage off the SDK response defensively — a missing/odd usage block
+    must never fail an otherwise-good extraction."""
+    try:
+        return ExtractionUsage(
+            input_tokens=int(getattr(message.usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(message.usage, "output_tokens", 0) or 0),
+            model=model,
+            body_chars=body_chars,
+        )
+    except Exception:
+        return ExtractionUsage(model=model, body_chars=body_chars)
+
+
 def extract_events(
     email_body: str,
     email_subject: str,
@@ -115,7 +142,7 @@ def extract_events(
     message_id: str = "",
     email_date: str = "",
     provider: str = "google",
-) -> ExtractionResponse:
+) -> tuple[ExtractionResponse, ExtractionUsage]:
     """Run the full extraction pipeline on a single email.
 
     1. Wrap in nonce-tagged boundaries (injection defense)
@@ -123,33 +150,38 @@ def extract_events(
     3. Call Claude API
     4. Parse JSON response into ExtractionResponse
     5. Normalize dates to ISO + stamp source_email_link (from message_id)
+
+    Returns (result, usage). Usage is telemetry for cost accounting; it is
+    returned rather than logged here so the caller can aggregate per sync.
     """
     wrapped, nonce = wrap_untrusted_content(
         email_body, email_subject, sender, email_date=email_date
     )
     prompt = build_extraction_prompt(wrapped, nonce)
+    model = settings.extraction_model
 
     message = _client.messages.create(
         # Settings-driven (D36): Haiku-first for this schema-locked task; the
         # EXTRACTION_MODEL env var flips back to Sonnet without a deploy.
-        model=settings.extraction_model,
+        model=model,
         max_tokens=_MAX_TOKENS,
         tools=[_EXTRACTION_TOOL],
         tool_choice={"type": "tool", "name": _EXTRACTION_TOOL["name"]},
         messages=[{"role": "user", "content": prompt}],
     )
+    usage = _usage_from(message, model, len(email_body))
 
     tool_use = next((b for b in message.content if b.type == "tool_use"), None)
     if tool_use is None:
         # Audit rule: types only, never values — model output is never logged.
         _log.warning("extraction returned no tool_use block; treating as empty")
-        return ExtractionResponse(events=[])
+        return ExtractionResponse(events=[]), usage
 
     try:
         result = ExtractionResponse.model_validate(tool_use.input)
     except Exception:
         _log.warning("extraction tool input failed schema validation; treating as empty")
-        return ExtractionResponse(events=[])
+        return ExtractionResponse(events=[]), usage
 
     # Normalize dates to ISO (backstop for the prompt rule) and stamp the
     # Gmail deep link — built server-side, never from Claude output.
@@ -159,4 +191,4 @@ def extract_events(
         if link:
             item.source_email_link = link
 
-    return result
+    return result, usage

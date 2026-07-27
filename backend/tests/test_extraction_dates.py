@@ -96,7 +96,7 @@ def test_extract_events_normalizes_prose_dates(monkeypatch):
     fake.content = [block]
     monkeypatch.setattr(ai_extractor._client.messages, "create", lambda **_: fake)
 
-    out = ai_extractor.extract_events(
+    out, _ = ai_extractor.extract_events(
         "body", "subj", "coach@club.org", message_id="m1", email_date=EMAIL_DATE
     )
 
