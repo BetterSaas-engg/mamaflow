@@ -350,6 +350,33 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-27 — Extraction cost bug FIXED (D39): ~$24 → ~$2.82/user/month.** PM flagged
+> 3 test users burning ~$2.40 USD/day. Investigation (token-counted, not guessed) ruled out model
+> and email size — measured per-call cost is $0.0037, implying **~216 calls/user/day** against
+> inboxes nowhere near that. **Root cause: the retry loop.** `sync_runner` wrote the
+> `synced_messages` marker only after a SUCCESSFUL extraction while a bare `except Exception`
+> swallowed every failure with no counter → a permanently-failing message was re-sent **every hour
+> for up to 30 days** (~720 full-price calls). ~9 stuck messages × 24 ticks ≈ the 216 observed.
+> Note the asymmetry that hid it: gate-*skipped* messages WERE marked — the cheap path was deduped,
+> the expensive path was not.
+> **Shipped (Phase 1+2 of the plan; 3+4 deferred):** (1) `message.usage` captured + one counts-only
+> per-sync log line incl. the model id (spend was previously invisible — there was no baseline);
+> (2) deleted the inline JSON-schema dump from the prompt — it was already the tool's `input_schema`
+> with `strict:True`, costing **587 tok/call (25% of input)** for nothing; **A/B'd on 5 real-shaped
+> cases → identical items, identical dates**; (3) bounded retries (`attempts`/`failure_kind`, typed
+> taxonomy: 400/422 permanent, 429/5xx transient max 3, 401/403 abort-the-run), circuit breaker at 5
+> consecutive transient failures, and a per-user **daily call budget (200)** backed by a new
+> `extraction_usage` table as the structural backstop against the next unforeseen runaway.
+> Migration `7b454f8c8a6d`. Backend **284 tests**; retry tests proven non-vacuous (neutralizing the
+> fix makes them fail). **USER: (a) watch Console spend for 24h — expect ~−88%, report the new
+> $/day; (b) set a Console monthly spend alert; (c) watch `give_ups` in the logs — should be ~0, a
+> climbing count is a real bug to chase, not a cost knob.**
+> **Deferred with a PM-agreed quality bar:** body trimming + gate tightening (the gate currently
+> passes ~100% of real mail — footers/quoted chains match it) must be **corpus-gated with
+> CI-enforced 100% recall**; Batch API (−50%) for hourly auto-sync only. Those take typical users to
+> ~$0.87/user/month. Also logged: a **correctness** bug found in passing — `_list_recent_ids` always
+> takes the newest 50 of 30 days, so >50 messages between ticks are silently never processed.
+
 > **Update 2026-07-26 — Multi-provider LIVE in prod + 1.0.0+3 distribution builds.** PR #17 merged;
 > Railway deployed and **verified live** (`/api/v1/auth/imap` serving ⇒ the container started after
 > `alembic upgrade head`, so the `users.provider` migration `c57ffd09b56b` applied). **Caught a
