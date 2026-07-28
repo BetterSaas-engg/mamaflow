@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # across runs without a cost spike.
     sync_scan_max_messages: int = 500
     sync_max_messages_per_run: int = 50
+    # Auto-sync skips accounts with no authenticated request in this many days;
+    # they resume the moment the user opens the app. Without it the hourly tick
+    # billed every account that ever signed up, forever — the cost regression
+    # that scales with churn instead of usage. 0 disables the skip.
+    auto_sync_dormant_days: int = 14
+    # Throttle for the last_seen_at write (it runs on every authed request;
+    # the value only needs day-level accuracy).
+    last_seen_throttle_seconds: int = 3600
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on

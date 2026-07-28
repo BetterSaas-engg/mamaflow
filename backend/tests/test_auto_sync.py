@@ -176,3 +176,98 @@ def test_scheduler_inert_when_nothing_wanted(monkeypatch):
     _wire(monkeypatch, firebase="", auto_sync=False)
     assert reminder_scheduler._scheduler is None
     reminder_scheduler.stop_scheduler()  # safe no-op
+
+
+# --- Dormant-user skip (cost hygiene) ---
+#
+# auto_sync_tick looped EVERY non-deleted user forever, so someone who signed
+# up once and never came back kept costing Claude calls every hour, indefinitely.
+# That is the cost regression that scales with churn, not with usage.
+
+
+def _days_ago(n):
+    import datetime
+
+    return datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=n)
+
+
+async def test_tick_skips_users_dormant_past_the_cutoff(
+    db, session_factory, monkeypatch
+):
+    active = await get_or_create_user(db, "active@x.com")
+    dormant = await get_or_create_user(db, "dormant@x.com")
+    active.last_seen_at = _days_ago(1)
+    dormant.last_seen_at = _days_ago(30)
+    await db.commit()
+    sync_state._states.clear()
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 14)
+
+    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
+    recorder = _JobRecorder()
+    monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
+
+    await auto_sync.auto_sync_tick(session_factory)
+
+    assert recorder.calls == [(active.id, "active@x.com")]
+
+
+async def test_a_dormant_user_who_returns_is_synced_again(
+    db, session_factory, monkeypatch
+):
+    """Dormancy must be a pause, not a tombstone — opening the app resumes it."""
+    u = await get_or_create_user(db, "back@x.com")
+    u.last_seen_at = _days_ago(30)
+    await db.commit()
+    sync_state._states.clear()
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 14)
+    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
+    recorder = _JobRecorder()
+    monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
+
+    await auto_sync.auto_sync_tick(session_factory)
+    assert recorder.calls == []
+
+    from api.services.users import touch_last_seen
+
+    await touch_last_seen(db, u)  # the user opens the app
+    sync_state._states.clear()
+    await auto_sync.auto_sync_tick(session_factory)
+
+    assert recorder.calls == [(u.id, "back@x.com")]
+
+
+async def test_a_brand_new_user_is_never_treated_as_dormant(
+    db, session_factory, monkeypatch
+):
+    """Signing up must not require a second visit before the first sync."""
+    u = await get_or_create_user(db, "new@x.com")
+    await db.commit()
+    sync_state._states.clear()
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 14)
+    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
+    recorder = _JobRecorder()
+    monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
+
+    await auto_sync.auto_sync_tick(session_factory)
+
+    assert recorder.calls == [(u.id, "new@x.com")]
+
+
+async def test_dormancy_can_be_disabled(db, session_factory, monkeypatch):
+    """0 = never skip, the escape hatch if this ever hides real syncs."""
+    u = await get_or_create_user(db, "old@x.com")
+    u.last_seen_at = _days_ago(365)
+    await db.commit()
+    sync_state._states.clear()
+    monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
+    monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 0)
+    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
+    recorder = _JobRecorder()
+    monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
+
+    await auto_sync.auto_sync_tick(session_factory)
+
+    assert recorder.calls == [(u.id, "old@x.com")]

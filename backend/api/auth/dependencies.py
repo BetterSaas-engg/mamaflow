@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.jwt import decode_access_token
 from api.db.session import get_db
 from api.models.user import User
+from api.services.users import touch_last_seen
 
 _bearer = HTTPBearer(auto_error=False)
 _UNAUTHORIZED = HTTPException(
@@ -44,5 +45,13 @@ async def get_current_user(
     user = await db.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise _UNAUTHORIZED
+
+    # Liveness for the dormant-account skip (throttled, so this is a no-op on
+    # almost every request). Never let it fail a request that is otherwise
+    # authenticated — this is cost bookkeeping, not authorization.
+    try:
+        await touch_last_seen(db, user)
+    except Exception:
+        await db.rollback()
 
     return user

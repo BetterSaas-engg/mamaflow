@@ -1,9 +1,12 @@
 """User lookup/creation for the mobile auth flow."""
 
+import datetime
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config.settings import settings
 from api.models.user import User
 
 
@@ -61,3 +64,25 @@ async def get_or_create_user(
         return winner
     await db.refresh(user)
     return user
+
+
+async def touch_last_seen(db: AsyncSession, user: User) -> None:
+    """Record that this user is active, throttled to one write per window.
+
+    Called from the auth dependency, so it runs on EVERY authenticated
+    request — an unthrottled write would add a round trip and a row update to
+    every API call for a value that only needs day-level accuracy.
+
+    Auto-sync reads this to skip dormant accounts; without it, a user who
+    signed up once and never returned kept costing Claude calls hourly forever.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    last = user.last_seen_at
+    if last is not None:
+        # Rows written before this column existed can come back naive.
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=datetime.timezone.utc)
+        if (now - last).total_seconds() < settings.last_seen_throttle_seconds:
+            return
+    user.last_seen_at = now
+    await db.commit()
