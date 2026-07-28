@@ -350,6 +350,31 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-28 — Dormant-account skip (D41) + E0 verification research (D42).**
+> **Dormant skip:** `auto_sync_tick` billed EVERY account that ever signed up, hourly, forever — the
+> cost that scales with churn rather than usage. Now skipped after `AUTO_SYNC_DORMANT_DAYS` (14) idle
+> days and re-armed by a single authenticated request; migration `a8f1c2d43e70` verified against a
+> real Postgres 16 (full chain, downgrade, and the production-shaped case of a pre-existing row
+> backfilling to "seen now" so current testers aren't wrongly skipped). **The security audit returned
+> a BLOCK on my first cut and it was right:** the liveness write ran on the request's session and
+> rolled back on failure, but `rollback()` expires every loaded attribute — including the `user` the
+> auth dependency returns — so the endpoint's next `user.id` raised `MissingGreenlet`. A transient DB
+> blip would have become a guaranteed 500 across all authenticated traffic, the opposite of what the
+> code's own comment claimed. The write now uses its own session. The regression test is proven
+> non-vacuous against a faithful reproduction (my first reproduction attempt let the commit succeed,
+> which made rollback a no-op and the test vacuous — worth remembering as a way to fool yourself).
+> Backend **302 tests**. Commits `3e5d292`, `5d6fa6a`.
+> **E0 research (`docs/e0-oauth-verification.md` rewritten):** two findings change the plan.
+> (a) Testing-mode **refresh tokens expire 7 days after consent** — so Google testers must re-consent
+> weekly; if a tester says the app went quiet after a week, that is this, not a sync bug. (b) The
+> unverified **100-user cap is a project-LIFETIME counter that cannot be reset**, so publishing early
+> to dodge (a) would burn it permanently. Decision: stay in Testing, accept the weekly re-auth, and
+> lean on IMAP onboarding (D38) — those users are off Google's track entirely. CASA is unavoidable
+> (~$675–855 **annually**, Tier 2/AL1, 6 weeks–3 months; Google triggers it, we cannot start it).
+> **Gap found: the in-app pre-consent disclosure screen is required and we don't have one** — a
+> Flutter change needing PM sign-off on wording. Pleasant surprise: the D19 ad firewall is verbatim
+> Google's Limited Use criterion, so it's an asset to lead with in the scope justification.
+
 > **Update 2026-07-28 — Silent message-drop FIXED (D40).** The correctness bug logged in passing on
 > 07-27 turned out to be worse than filed. `_list_recent_ids` fetched **one un-paginated page** of the
 > newest 50 in the 30-day window, so once those synced, everything older was never listed again and

@@ -1,56 +1,120 @@
 # E0 — Google OAuth verification (restricted scope): the checklist
 
-Mamaflow requests `gmail.readonly` — a **restricted** scope. Leaving Testing mode (no 100-tester
-cap, no "unverified app" interstitial) requires Google's restricted-scope verification, which
-includes an **annual CASA security assessment**. Typical end-to-end timeline is **6–12 weeks** —
-this is the launch long-pole, so it runs in parallel with everything else. Ads (Track E) are
-gated behind it (D19/D21: "ships and verifies").
+Mamaflow requests `gmail.readonly` — a **restricted** scope. Leaving Testing mode requires Google's
+restricted-scope verification, which includes an **annual CASA security assessment**. This is the
+launch long-pole and it gates ads (D19/D21: "ships and verifies").
 
-## Hard prerequisite: a domain we own
+> **Revised 2026-07-28** against primary Google / App Defense Alliance sources. The July 15 draft was
+> directionally right but missed two things that change the plan: the **7-day refresh-token expiry**
+> in Testing mode, and the **required in-app pre-consent disclosure** we don't have. Current cost and
+> timeline: **~$675–855 up front and again annually, 6 weeks best case / 2–3 months realistic.**
 
-Google requires the app's **homepage and privacy policy on a domain you own**, verified via
-Search Console. `mamaflow-production.up.railway.app` cannot be used (Railway owns it).
+Applies only to `provider=google` users. IMAP users (Yahoo/Rogers/iCloud, D38) are entirely off this
+track — a bigger win than it looked when we chose it.
 
-- [ ] **1. Acquire the domain** (e.g. `mamaflow.app` / `getmamaflow.com` — PM pick).
-- [ ] **2. Verify it in Search Console** (DNS TXT record) with the same Google account that owns
-      the OAuth project.
-- [ ] **3. Host two pages on it** (a static one-pager is enough to start; Railway custom domain,
-      GitHub Pages, or Vercel all work):
-      - **Homepage** — what Mamaflow does, who it's for, visible link to the privacy policy.
-        Must describe the Gmail data use ("reads your inbox to extract family events…").
-      - **Privacy policy** — publish `docs/privacy-policy.md` (already drafted, includes the
-        Firebase/FCM sub-processor row). Must name the Gmail data accessed, purpose, storage,
-        deletion path (Settings → Delete account), and the **Limited Use disclosure** verbatim:
-        "Mamaflow's use and transfer of information received from Google APIs adheres to the
-        Google API Services User Data Policy, including the Limited Use requirements."
+## Why this is urgent, not "later"
 
-## Console work (after the domain)
+| | Testing (today) | Published, unverified | Published, verified |
+|---|---|---|---|
+| Audience | 100 test users | anyone, but **100 new users for the project's LIFETIME** | unlimited |
+| Refresh tokens | **expire 7 days after consent** | normal | normal |
+| Warning screen | yes | yes | no |
 
-- [ ] **4. OAuth consent screen** (project `Mamaflow`): app name, logo (120x120), support email,
-      **authorized domain** = the new domain, homepage + privacy-policy URLs, developer contact.
-- [ ] **5. Scope justification** (written in the verification form): why `gmail.readonly` is
-      needed (metadata-first scan → blocklist → extract family events server-side; narrower
-      scopes like `gmail.metadata` don't expose message bodies needed for extraction).
-- [ ] **6. Demo video** (unlisted YouTube): the full OAuth flow from the app, the consent screen
-      showing the scope, then the feature the scope powers (sync → agenda items). Must show the
-      app name matching the consent screen.
-- [ ] **7. Submit for verification** → brand verification first (days), then restricted-scope
-      review; Google replies by email, expect back-and-forth.
+- **Google testers must re-consent every 7 days.** `access_type=offline` does not save us — the
+  refresh token itself dies. If a Google tester says the app "went quiet" after about a week, this is
+  why, not a bug in our sync. (Correction to the July 15 note that testers were unaffected: they are
+  on the Test users list, but the 7-day tax still applies.)
+- **The 100-user unverified cap is a lifetime counter and cannot be reset.** Publishing early to
+  dodge the 7-day expiry would burn it permanently. Stay in Testing until verified.
 
-## CASA (Cloud Application Security Assessment)
+No small-scale exemption avoids both — the "personal use / under 100 users" carve-out is functionally
+Testing mode with the same tax.
 
-- [ ] **8. CASA Tier 2** — required for restricted Gmail scopes, annual. Options: an authorized
-      lab (paid, ~$500–$4.5k) or the self-scan route where eligible. Scope: the deployed backend.
-      Our posture is already strong (JWT auth, soft-delete, env-only credentials, types-only
-      logging, injection wrap, deterministic firewall) — the audits in HANDOFF are the evidence
-      trail to hand the assessor.
+## What we already satisfy ✅
 
-## Ordering / what can start today
+- Homepage on our own domain (**themamaflow.com**), describing the product, not login-gated.
+- Privacy policy **on the same domain** (a hard requirement), linked from the homepage.
+- Explicit **Limited Use** statement naming the Google API Services User Data Policy.
+- **Anthropic named as a sub-processor**, with what is sent and why.
+- Retention/deletion documented; account deletion implemented.
+- **The ad firewall (D19) is verbatim Google's own criterion** — Limited Use bans using Google user
+  data for ads, retargeting, or transfer to ad platforms/data brokers. Lead with it in the scope
+  justification; it is an asset in review, not merely a constraint we accept.
 
-1. Domain purchase (5 min, PM) → unblocks everything else.
-2. Homepage + privacy-policy hosting (Claude can build the static pages once the domain exists).
-3. Consent-screen fields + scope justification + video script (Claude drafts; PM records).
-4. Submit; CASA runs during/after Google's review.
+## What is missing ❌
 
-Keep testing under the 100-user cap meanwhile — verification is not needed for TestFlight/
-Firebase-App-Distribution testers who are on the Test users list.
+- [ ] **1. In-app pre-consent disclosure screen — required, and absent.** The Workspace user data
+      policy (updated 2026-07-13) requires a prominent in-app disclosure that *immediately precedes*
+      the OAuth request, requires **affirmative action** (a tap — navigating away must not count),
+      does not auto-dismiss, and **cannot live only in the privacy policy**. It must state what is
+      accessed, how it's used, how it's shared, plus the Limited Use adherence statement. This is a
+      Flutter change and the most commonly missed requirement. Wording needs PM sign-off.
+- [ ] **2. Domain verification in Search Console** — as a **Domain (DNS)** property, using an account
+      that is an **Owner/Editor of the GCP project**. A mismatch here fails silently.
+- [ ] **3. Consent-screen fields** — app name (must match the homepage), logo, support email,
+      authorized domains, homepage + privacy-policy URLs, developer contact.
+- [ ] **4. Scope justification** — must argue why a narrower scope will not do. "Improves user
+      experience" is auto-rejected. Ours: `gmail.metadata` exposes headers only, while event details
+      (dates, times, locations) live in the body and the `text/calendar` part — D37 is the receipt: a
+      real invite whose date existed *only* in the ICS part.
+- [ ] **5. Demo video** — YouTube **unlisted** (not Drive), in **English** including the consent
+      screen's own language toggle, showing the full consent flow, the correct app name, **the OAuth
+      client ID legible in the address bar**, and each scope's use. Record it *after* revoking our own
+      prior grant, or the consent screen never appears — a common rejection. No stated length limit.
+- [ ] **6. Freeze branding before submitting.** Any later change to app name, logo, redirect URI,
+      homepage, privacy-policy URL, or scopes **resets verification**.
+- [ ] **7. Submit** brand verification (2–3 days) → scope verification (~6 weeks quoted).
+
+## CASA
+
+Required — no way around it. Google's rule: if you store or transmit restricted-scope data on
+servers, you need the assessment. Our FastAPI/Railway backend qualifies ("third party" is written
+from Google's perspective — we are the third party). Narrowing scope doesn't help: **all four** Gmail
+scopes (`readonly`, `metadata`, `modify`, `mail.google.com`) are restricted. Claims that
+`gmail.metadata` avoids CASA are false.
+
+- [ ] **8.** Expect **Tier 2 / AL1** — we run the scan, a lab reviews the evidence; the lab does not
+      touch our app or code. We don't choose the level; Google assigns it risk-based.
+- **We cannot start it.** Google triggers it by email *after* brand + scope verification pass. Known
+  2026 failure mode: that email never arrives — escalate on the existing verification thread rather
+  than resubmitting.
+- **30-day deadline** to submit once initiated.
+- Only **9 authorized assessors** exist; "CASA" sold by anyone else yields no valid Letter of
+  Validation. TAC Security publishes **$675 (Basic) / $855 (Premium)**, 1–3 weeks; Leviathan
+  $3,000–4,500. Get a written quote — TAC's own pages contradict each other.
+- **Renews annually** — recurring cost, not one-off.
+- The $15k–$75k figures still circulating in blog posts describe the pre-CASA regime. Ignore them.
+- Pre-scan the backend against **OWASP ASVS 4.0** before the lab step; it collapses that step from
+  weeks to days. Our posture is already strong (JWT auth, soft-delete, secrets outside the DB,
+  types-only logging, injection wrap, deterministic firewall) and the HANDOFF audit trail is the
+  evidence to hand over.
+
+**The Anthropic dependency is the highest-risk item in our stack.** Third-party transfers are
+permitted when necessary for a *prominent user-facing feature* — extraction-to-calendar is exactly
+that, and Presidio redaction strengthens it. Three hard constraints:
+
+1. **Training on the data is banned outright.** We must be able to state Anthropic does not train on
+   API inputs — keep a dated copy of the commercial terms as evidence.
+2. Anthropic is our contractor, so we are responsible for its compliance with Google's policy.
+3. It must be disclosed by name in the privacy policy (done).
+
+## Common rejection reasons
+
+1. Generic scope justification (the #1 cause).
+2. Requesting scopes for features not yet implemented — "future enhancements" is explicitly rejected.
+3. Consent-screen scopes ≠ submitted scopes.
+4. Demo video missing the client ID, non-English consent screen, or no visible consent flow.
+5. Privacy policy on a different domain, unlinked, or describing the wrong behaviour.
+6. App name mismatch between consent screen and homepage.
+7. Occasionally a reviewer false-positive on the homepage requirement — push back before redesigning.
+
+## Ordering
+
+1. Search Console domain verification (PM, minutes).
+2. In-app disclosure screen (Claude builds; PM approves wording).
+3. Freeze branding → submit brand → submit scope verification.
+4. Record demo video.
+5. Wait for Google's CASA email → engage an assessor from the authorized nine.
+
+**Do not burn the 100-user unverified cap on beta.** Keep beta in Testing mode and accept the weekly
+re-auth for Google testers — or lean on IMAP onboarding, which avoids the 7-day re-consent entirely.
