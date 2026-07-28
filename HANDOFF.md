@@ -350,6 +350,35 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-28 — Silent message-drop FIXED (D40).** The correctness bug logged in passing on
+> 07-27 turned out to be worse than filed. `_list_recent_ids` fetched **one un-paginated page** of the
+> newest 50 in the 30-day window, so once those synced, everything older was never listed again and
+> could never be extracted. The worst case is not an edge case: a **new user's 30-day backlog** of
+> hundreds of emails, of which only the newest 50 ever process — silently breaking the core promise.
+> **Fix:** the reader contract splits into `list_recent_ids` (ids only, paginated to
+> `SYNC_SCAN_MAX_MESSAGES=500`) + `fetch_metadata` (headers for given ids), so the runner dedups on
+> **ids before fetching any headers**; the run stays bounded at `SYNC_MAX_MESSAGES_PER_RUN=50`,
+> processed **oldest-first** so a backlog drains in arrival order, remainder logged as queued. Side
+> benefit: a quiet inbox costs one list call per sync instead of re-fetching headers for the whole
+> window hourly. Commit `bcbb082`.
+> **The security audit then caught the fix re-creating the bug through a different door** — and
+> proved it by simulation rather than inspection: blocked senders were never marked, so they stayed
+> "unsynced" for the whole window and, under oldest-first selection, permanently saturated every
+> batch once in-window blocked volume exceeded 50 — which the seed blocklist
+> (linkedin/amazon/shopify/etsy) makes ordinary. Real mail newer than them would never be reached, no
+> matter how many runs ran. Blocked ids are now retired into the same marker table as successes (both
+> are terminal verdicts; no body was fetched, so no content is stored). The audit also caught an IMAP
+> cost regression: a message id IS a header there, so `list_recent_ids` and `fetch_metadata` were each
+> scanning the full window — **double** header cost per sync over a 10× wider window for every
+> Yahoo/iCloud/Rogers user, hourly. They now share one scan via a single-use TTL'd handoff. Commit
+> `c01000b`. Backend **295 tests**, including the first direct coverage of the Gmail pagination loop
+> (previously exercised only through fakes that bypassed it) and a mixed blocked/real backlog test
+> that reproduces the starvation.
+> **Known bound, deliberately left:** mail beyond position **500** in the 30-day window is still never
+> listed — fine below ~16 emails/day, not above. Raising `SYNC_SCAN_MAX_MESSAGES` costs only cheap
+> Gmail list calls (Claude spend stays capped by the per-run bound) but widens the dedup `IN` clause,
+> so it wants chunking first. **Decide this before public launch, not after.**
+
 > **Update 2026-07-27 — Extraction cost bug FIXED (D39): ~$24 → ~$2.82/user/month.** PM flagged
 > 3 test users burning ~$2.40 USD/day. Investigation (token-counted, not guessed) ruled out model
 > and email size — measured per-call cost is $0.0037, implying **~216 calls/user/day** against
