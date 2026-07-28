@@ -231,7 +231,7 @@ async def test_a_dormant_user_who_returns_is_synced_again(
 
     from api.services.users import touch_last_seen
 
-    await touch_last_seen(db, u)  # the user opens the app
+    await touch_last_seen(session_factory, u.id, u.last_seen_at)  # opens the app
     sync_state._states.clear()
     await auto_sync.auto_sync_tick(session_factory)
 
