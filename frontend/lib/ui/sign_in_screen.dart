@@ -7,6 +7,7 @@ import '../auth/session_controller.dart';
 import '../theme/app_logo.dart';
 import '../theme/tokens.dart';
 import 'app_password_sign_in_screen.dart';
+import 'google_data_disclosure.dart';
 
 /// Shown when no session JWT is present. The single action runs the mobile
 /// Google sign-in -> backend exchange -> JWT store flow (logic unchanged).
@@ -22,6 +23,12 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   String? _error;
 
   Future<void> _signIn() async {
+    // Google requires an in-app disclosure that IMMEDIATELY precedes the
+    // consent request, with affirmative action — so it gates the flow here
+    // rather than sitting somewhere in onboarding. Declining is a normal
+    // outcome, not an error: no message, nothing to retry.
+    final agreed = await showGoogleDataDisclosure(context);
+    if (!agreed || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -117,7 +124,10 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                 ],
                 const SizedBox(height: AppSpacing.xl),
                 Text(
-                  'We only read your email to find family events. Nothing is shared.',
+                  // NOT "nothing is shared" — redacted text does go to our AI
+                  // provider, and a disclosure that misdescribes behaviour is a
+                  // documented verification rejection (docs/e0-oauth-verification.md).
+                  'We only read your email to find family events. Never for ads.',
                   style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                   textAlign: TextAlign.center,
                 ),
