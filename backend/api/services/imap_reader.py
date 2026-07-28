@@ -102,7 +102,10 @@ def _search_recent_uids(conn) -> list[bytes]:
     if typ != "OK" or not data or not data[0]:
         return []
     uids = data[0].split()
-    return uids[-MAX_PREVIEW_MESSAGES:]  # most recent window, cap parity
+    # Wide scan window: capping here at the per-run size meant anything older
+    # than the newest N was never listed again once those synced — silently
+    # unextracted. Header fetches are batched, so a wide window is cheap.
+    return uids[-settings.sync_scan_max_messages:]
 
 
 def _parse_header_blob(literal: bytes):
@@ -180,14 +183,34 @@ def _fetch_headers(conn, uids: list[bytes]) -> list[tuple[str, dict]]:
     return out
 
 
-def fetch_recent_metadata(user_email: str, provider: str) -> list[dict]:
-    """Last 30 days of INBOX metadata, HEADERS ONLY (metadata-first: the
-    caller checks each sender against the blocklist before any body fetch)."""
+def _recent_metadata(user_email: str, provider: str) -> list[dict]:
+    """Newest-first metadata for the scan window. One batched header FETCH."""
     conn = _connect(user_email, provider)
     try:
-        return [meta for _uid, meta in _fetch_headers(conn, _search_recent_uids(conn))]
+        rows = [meta for _uid, meta in _fetch_headers(conn, _search_recent_uids(conn))]
     finally:
         _shutdown(conn)
+    rows.reverse()  # UIDs ascend (oldest first); callers expect newest first
+    return rows
+
+
+def list_recent_ids(user_email: str, provider: str) -> list[str]:
+    """Message ids in the scan window, newest first.
+
+    Unlike Gmail (where ids come from a cheap id-only list call), an IMAP
+    message id IS a header, so this necessarily fetches headers — but in one
+    batched FETCH, and still without touching any body (metadata-first)."""
+    return [m["message_id"] for m in _recent_metadata(user_email, provider)]
+
+
+def fetch_metadata(user_email: str, message_ids: list[str], provider: str) -> list[dict]:
+    """Headers for the given ids. Stateless re-resolution (a fresh batched
+    header pass, filtered) — same philosophy as fetch_message_bodies, so no
+    UID/connection state is carried between calls."""
+    if not message_ids:
+        return []
+    wanted = set(message_ids)
+    return [m for m in _recent_metadata(user_email, provider) if m["message_id"] in wanted]
 
 
 def _part_text(part) -> str:

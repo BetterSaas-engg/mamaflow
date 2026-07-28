@@ -29,6 +29,20 @@ def _extraction(*events):
     )
 
 
+def _wire_reader(monkeypatch, metadata):
+    """Wire the reader seam: sync lists ids first (cheap), then fetches headers
+    only for the unsynced ones. Mirrors the real contract so tests exercise the
+    same dedup-before-headers path production uses."""
+    by_id = {m["message_id"]: m for m in metadata}
+    monkeypatch.setattr(
+        sync_runner, "list_recent_ids",
+        lambda email, provider="google": list(by_id),
+    )
+    monkeypatch.setattr(
+        sync_runner, "fetch_metadata",
+        lambda email, ids, provider="google": [by_id[i] for i in ids if i in by_id],
+    )
+
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
@@ -69,7 +83,7 @@ async def test_sync_runs_in_background_and_reports_done(client, db, monkeypatch)
         {"message_id": "m_ok", "sender": "school@allowed.org", "subject": "Soccer", "date": "Mon"},
         {"message_id": "m_block", "sender": "billing@blocked.com", "subject": "Invoice", "date": "Tue"},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    _wire_reader(monkeypatch, metadata)
 
     fetched_ids = []
 
@@ -111,7 +125,7 @@ async def test_resync_skips_already_synced_before_extraction(client, db, monkeyp
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    _wire_reader(monkeypatch, metadata)
 
     body_calls = []
     extract_calls = []
@@ -151,7 +165,7 @@ async def test_resync_skips_zero_event_messages(client, db, monkeypatch):
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    _wire_reader(monkeypatch, metadata)
 
     extract_calls = []
 
@@ -182,7 +196,7 @@ async def test_gated_email_never_reaches_claude_and_stays_skipped(client, db, mo
         {"message_id": "m_gate", "sender": "shop@store.com", "subject": "Update", "date": "Mon"},
         {"message_id": "m_real", "sender": "school@x.org", "subject": "Practice", "date": "Mon"},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    _wire_reader(monkeypatch, metadata)
     bodies = {
         "m_gate": "Discover our newest arrivals with free shipping.",  # no signal
         "m_real": "Soccer practice moves to Thursday 3:30 PM.",
@@ -215,7 +229,7 @@ async def test_failed_extraction_is_retried_next_sync(client, db, monkeypatch):
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     user, token = await _user_with_token(db)
     metadata = [{"message_id": "m1", "sender": "a@x.org", "subject": "S", "date": "Mon"}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    _wire_reader(monkeypatch, metadata)
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids})
 
     extract_calls = []
@@ -242,7 +256,7 @@ async def test_sync_cooldown_returns_429(client, db, monkeypatch):
 
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 60)
     _, token = await _user_with_token(db)
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": [])
+    monkeypatch.setattr(sync_runner, "list_recent_ids", lambda email, provider="google": [])
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {})
 
     first = await client.post("/api/v1/sync", headers=_auth(token))
@@ -284,7 +298,7 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
         {"message_id": "a", "sender": "s@school.edu", "subject": "x", "date": ""},
         {"message_id": "b", "sender": "s@school.edu", "subject": "y", "date": ""},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": meta)
+    _wire_reader(monkeypatch, meta)
     monkeypatch.setattr(sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids})
     # s@school.edu is not on the default blocklist, so both messages pass classify.
 
@@ -319,7 +333,7 @@ async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypat
 
     user = await get_or_create_user(db, "offloop@example.com")
     meta = [{"message_id": "t1", "sender": "s@school.edu", "subject": "x", "date": ""}]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": meta)
+    _wire_reader(monkeypatch, meta)
     monkeypatch.setattr(
         sync_runner, "fetch_message_bodies", lambda email, ids, provider="google": {i: "practice on Thursday" for i in ids}
     )
@@ -349,7 +363,7 @@ async def test_failed_sync_reports_failed_status(client, db, monkeypatch):
     def boom(email, provider="google"):
         raise ValueError("gmail exploded")
 
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", boom)
+    monkeypatch.setattr(sync_runner, "list_recent_ids", boom)
 
     resp = await client.post("/api/v1/sync", headers=_auth(token))
     assert resp.status_code == 202
@@ -372,7 +386,7 @@ async def test_one_failing_extraction_does_not_kill_the_sync(client, db, monkeyp
         {"message_id": "m_bad", "sender": "a@ok.org", "subject": "Bad", "date": "Mon"},
         {"message_id": "m_good", "sender": "b@ok.org", "subject": "Good", "date": "Tue"},
     ]
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata)
+    _wire_reader(monkeypatch, metadata)
     monkeypatch.setattr(
         sync_runner, "fetch_message_bodies",
         lambda email, ids, provider="google": {mid: "practice on Thursday" for mid in ids},
@@ -409,7 +423,7 @@ async def test_reauth_required_surfaces_clean_message(client, db, monkeypatch):
     def needs_reauth(email, provider="google"):
         raise ReauthRequired
 
-    monkeypatch.setattr(sync_runner, "fetch_recent_metadata", needs_reauth)
+    monkeypatch.setattr(sync_runner, "list_recent_ids", needs_reauth)
 
     resp = await client.post("/api/v1/sync", headers=_auth(token))
     assert resp.status_code == 202

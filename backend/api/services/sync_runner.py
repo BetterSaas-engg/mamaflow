@@ -21,7 +21,11 @@ from api.services.ai_extractor import (
 from api.services.extraction_budget import has_budget, record_call
 from api.services.extraction_gate import has_extractable_signal
 from api.services.google_token import ReauthRequired
-from api.services.mail_reader import fetch_message_bodies, fetch_recent_metadata
+from api.services.mail_reader import (
+    fetch_message_bodies,
+    fetch_metadata,
+    list_recent_ids,
+)
 from api.services.items import (
     existing_message_ids,
     mark_message_synced,
@@ -78,17 +82,25 @@ async def run_sync_job(
                 return
 
             provider = user.provider
-            metadata = await asyncio.to_thread(fetch_recent_metadata, user_email, provider)
-            passed, blocked = await _classify(metadata, db)
+            # 1. Ids only (cheap). The scan window is wide: capping it at the
+            #    per-run size meant anything older than the newest N was never
+            #    listed again once those synced — silently unextracted forever,
+            #    worst on a new user's 30-day backlog.
+            all_ids = await asyncio.to_thread(list_recent_ids, user_email, provider)
+            # 2. Dedup on ids BEFORE fetching any headers, so a quiet inbox
+            #    costs one list call instead of re-reading the whole window.
+            already = await existing_message_ids(db, user_id, all_ids)
+            unsynced = [mid for mid in all_ids if mid not in already]
+            # 3. Bound the run. Oldest-first so a backlog drains in arrival
+            #    order and can never starve behind newer mail; the remainder
+            #    stays unmarked and is picked up by the next sync.
+            batch_ids = list(reversed(unsynced))[: settings.sync_max_messages_per_run]
+            backlog = len(unsynced) - len(batch_ids)
 
-            # Incremental: drop already-synced messages BEFORE body fetch and
-            # extraction — dedup after the Claude call would still spend tokens.
-            already = await existing_message_ids(
-                db, user_id, [m["message_id"] for m, _ in passed]
+            metadata = await asyncio.to_thread(
+                fetch_metadata, user_email, batch_ids, provider
             )
-            new_passed = [
-                (m, s) for m, s in passed if m["message_id"] not in already
-            ]
+            new_passed, blocked = await _classify(metadata, db)
 
             bodies = await asyncio.to_thread(
                 fetch_message_bodies,
@@ -136,11 +148,15 @@ async def run_sync_job(
                     if not has_extractable_signal(msg["subject"], body):
                         gate_skipped += 1
                         await mark_message_synced(db, user_id, msg["message_id"])
+                        # Gated messages ARE processed (deliberately, cheaply) —
+                        # keep the counter in step or this `continue` would make
+                        # the final tally undercount them.
+                        processed = _i + 1
                         sync_state.progress(
                             user_id,
                             messages_scanned=len(metadata),
                             to_process=len(new_passed),
-                            processed=_i + 1,
+                            processed=processed,
                             items_created=items_created,
                         )
                         continue
@@ -258,7 +274,8 @@ async def run_sync_job(
             # flip to a pricier tier attributable from one grep.
             _log.info(
                 "sync: user=%s model=%s calls=%d gate_skipped=%d to_process=%d "
-                "in_tok=%d out_tok=%d items=%d give_ups=%d budget_exhausted=%s",
+                "in_tok=%d out_tok=%d items=%d give_ups=%d budget_exhausted=%s "
+                "backlog=%d",
                 user_id,
                 settings.extraction_model,
                 calls,
@@ -269,7 +286,16 @@ async def run_sync_job(
                 items_created,
                 give_ups,
                 budget_exhausted,
+                backlog,
             )
+            if backlog:
+                # Visible, not silent: the remainder is queued for the next
+                # sync rather than dropped (the pre-fix behaviour).
+                _log.info(
+                    "sync: %d message(s) queued for the next run for user %s",
+                    backlog,
+                    user_id,
+                )
             sync_state.finish(
                 user_id,
                 messages_scanned=len(metadata),

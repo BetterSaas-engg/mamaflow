@@ -9,10 +9,10 @@ from api.services.reader_errors import ReauthRequired
 def test_google_routes_to_gmail_reader(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        mail_reader.gmail_reader, "fetch_recent_metadata",
+        mail_reader.gmail_reader, "list_recent_ids",
         lambda email: calls.append(("gmail", email)) or [],
     )
-    mail_reader.fetch_recent_metadata("a@gmail.com", "google")
+    mail_reader.list_recent_ids("a@gmail.com", "google")
     assert calls == [("gmail", "a@gmail.com")]
 
 
@@ -29,6 +29,6 @@ def test_imap_providers_route_to_imap_reader(monkeypatch):
 
 def test_unknown_provider_raises_reauth():
     with pytest.raises(ReauthRequired):
-        mail_reader.fetch_recent_metadata("a@b.com", "aol")
+        mail_reader.list_recent_ids("a@b.com", "aol")
     with pytest.raises(ReauthRequired):
         mail_reader.fetch_message_bodies("a@b.com", ["m"], "microsoft")  # Phase 2, not yet

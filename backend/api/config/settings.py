@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # Hard per-user daily ceiling on extraction calls. Structurally caps the
     # blast radius of any future runaway, including ones we haven't imagined.
     extraction_daily_call_budget: int = 200
+    # How many message ids one sync LISTS (cheap — ids only, no bodies) and how
+    # many it actually processes. These were a single value of 50, which meant
+    # anything older than the newest 50 in the 30-day window was never listed
+    # again once those were synced — silently unextracted forever, worst on a
+    # new user's backlog. Listing wide + processing bounded drains a backlog
+    # across runs without a cost spike.
+    sync_scan_max_messages: int = 500
+    sync_max_messages_per_run: int = 50
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on
