@@ -259,3 +259,35 @@ def test_google_shaped_credential_is_rejected():
 
 def test_since_date_uses_english_months(monkeypatch):
     assert imap_reader._since_date().split("-")[1] in imap_reader._MONTHS
+
+
+def test_listing_then_fetching_metadata_scans_the_window_once():
+    """Gmail gets ids from a cheap id-only list call; IMAP must fetch headers
+    to know an id at all. Doing that scan twice per sync (once to list, once to
+    re-resolve) doubled IMAP header cost over a 10x wider window — a real
+    regression for Yahoo/iCloud/Rogers users on every hourly tick."""
+    FakeIMAP.messages = {b"1": PLAIN_MSG, b"2": ENCODED_MSG}
+
+    ids = imap_reader.list_recent_ids(EMAIL, "yahoo")
+    meta = imap_reader.fetch_metadata(EMAIL, ids, "yahoo")
+
+    assert {m["message_id"] for m in meta} == set(ids)  # same data, still correct
+    header_fetches = [
+        c
+        for conn in FakeIMAP.instances
+        for c in conn.commands
+        if "FETCH" in c and "HEADER.FIELDS" in c
+    ]
+    assert len(header_fetches) == 1, (
+        f"scanned the window {len(header_fetches)}x for one sync"
+    )
+
+
+def test_a_later_sync_rescans_rather_than_serving_stale_headers():
+    """The reuse must not turn into a cache that hides new mail."""
+    FakeIMAP.messages = {b"1": PLAIN_MSG}
+    imap_reader.list_recent_ids(EMAIL, "yahoo")
+    imap_reader.fetch_metadata(EMAIL, ["abc123@school.org"], "yahoo")
+
+    FakeIMAP.messages = {b"1": PLAIN_MSG, b"2": ENCODED_MSG}  # new mail arrives
+    assert len(imap_reader.list_recent_ids(EMAIL, "yahoo")) == 2

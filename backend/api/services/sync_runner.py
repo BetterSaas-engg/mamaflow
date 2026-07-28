@@ -29,6 +29,7 @@ from api.services.mail_reader import (
 from api.services.items import (
     existing_message_ids,
     mark_message_synced,
+    mark_messages_blocked,
     persist_items,
     record_message_failure,
 )
@@ -101,6 +102,14 @@ async def run_sync_job(
                 fetch_metadata, user_email, batch_ids, provider
             )
             new_passed, blocked = await _classify(metadata, db)
+            # 4. Retire the blocked ids. They are a terminal verdict reached
+            #    from headers alone, but leaving them unmarked kept them in the
+            #    oldest-first pool forever — enough blocked mail in the window
+            #    (easy: the seed blocklist covers high-volume senders) and every
+            #    batch was 100% blocked ids while real mail waited behind them.
+            await mark_messages_blocked(
+                db, user_id, [b["message_id"] for b in blocked]
+            )
 
             bodies = await asyncio.to_thread(
                 fetch_message_bodies,

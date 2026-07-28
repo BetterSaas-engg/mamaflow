@@ -28,6 +28,8 @@ import hashlib
 import imaplib
 import logging
 import re
+import threading
+import time
 
 from api.auth.token_store import get_token
 from api.config.settings import settings
@@ -194,23 +196,62 @@ def _recent_metadata(user_email: str, provider: str) -> list[dict]:
     return rows
 
 
+# Single-use handoff between the two halves of ONE sync — deliberately not a
+# cache. A Gmail id comes from a cheap id-only list call, but an IMAP id IS a
+# header, so list_recent_ids must scan; without this, fetch_metadata scanned
+# the same window a second time and every IMAP user paid double header cost per
+# sync over a 10x wider window (2026-07-28 audit).
+#
+# Headers only, never bodies (D5). Entries are consumed on first read and
+# expire in seconds, so this is in-flight sync state, not storage.
+_handoff: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_handoff_lock = threading.Lock()
+_HANDOFF_TTL_SECONDS = 120
+
+
+def _handoff_put(key, rows: list[dict]) -> None:
+    now = time.monotonic()
+    with _handoff_lock:
+        # Prune first: a sync that lists and then finds nothing new never
+        # consumes its entry, and this runs for every user.
+        for k in [k for k, (ts, _) in _handoff.items() if now - ts > _HANDOFF_TTL_SECONDS]:
+            del _handoff[k]
+        _handoff[key] = (now, rows)
+
+
+def _handoff_take(key) -> list[dict] | None:
+    """Consume the pending window, or None if absent/stale."""
+    with _handoff_lock:
+        entry = _handoff.pop(key, None)
+    if entry is None or time.monotonic() - entry[0] > _HANDOFF_TTL_SECONDS:
+        return None
+    return entry[1]
+
+
 def list_recent_ids(user_email: str, provider: str) -> list[str]:
     """Message ids in the scan window, newest first.
 
     Unlike Gmail (where ids come from a cheap id-only list call), an IMAP
     message id IS a header, so this necessarily fetches headers — but in one
     batched FETCH, and still without touching any body (metadata-first)."""
-    return [m["message_id"] for m in _recent_metadata(user_email, provider)]
+    rows = _recent_metadata(user_email, provider)
+    _handoff_put((user_email, provider), rows)
+    return [m["message_id"] for m in rows]
 
 
 def fetch_metadata(user_email: str, message_ids: list[str], provider: str) -> list[dict]:
-    """Headers for the given ids. Stateless re-resolution (a fresh batched
-    header pass, filtered) — same philosophy as fetch_message_bodies, so no
-    UID/connection state is carried between calls."""
+    """Headers for the given ids, filtered from this sync's window scan.
+
+    Falls back to a fresh scan when there is no pending window (a direct
+    caller, or an expired handoff), so correctness never depends on the reuse.
+    """
     if not message_ids:
         return []
     wanted = set(message_ids)
-    return [m for m in _recent_metadata(user_email, provider) if m["message_id"] in wanted]
+    rows = _handoff_take((user_email, provider))
+    if rows is None:
+        rows = _recent_metadata(user_email, provider)
+    return [m for m in rows if m["message_id"] in wanted]
 
 
 def _part_text(part) -> str:
