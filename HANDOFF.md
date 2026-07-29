@@ -350,6 +350,32 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-28 — Android OAuth redirect FIXED (D43) + E0 pre-consent disclosure built.**
+> The long-standing "Chrome finishes Google sign-in but never returns to the app" bug is solved, with
+> the root cause **confirmed on the PM's own S25 Ultra** rather than inferred. flutter_web_auth_2's
+> `CallbackActivity` hands the redirect to a **static in-process map** and then calls
+> `finishAndRemoveTask()`. While the user is on the consent screen the app is backgrounded and Android
+> may kill it — routine on this device, which parks the app in the **RARE standby bucket**. The
+> redirect then cold-starts the process, the map is empty, the auth code is silently dropped, and the
+> task is wiped. Reproduced with the process dead: `CallbackActivity` cold-started, was destroyed, and
+> `topResumedActivity` became the Samsung launcher, MainActivity never running. After the fix the
+> identical test lands on `.MainActivity`, no crash, `CallbackActivity` gone entirely.
+> **Fix:** redirect intent-filter moved to MainActivity (`singleTask`); PKCE verifier + state
+> persisted to Keystore **before** the browser opens (they were local variables that died with the
+> process); `app_links` delivers the cold-start initial link; `recoverPendingAuthorization()` finishes
+> the sign-in at startup, keeping the RFC 8252 state check and consuming the record so a code can't be
+> replayed. **iOS untouched** — its `ASWebAuthenticationSession` returns in-process and never had this
+> failure. **The earlier R8/ProGuard hypothesis was wrong**: the original `resolve-activity` check used
+> the wrong package name, so that evidence was worthless; re-checked correctly, the activity always
+> resolved. Commit `a048c74`. **Still needs a human for end-to-end proof** — the structural half is
+> verified on-device and the recovery logic is unit-tested, but a real consent → kill → recover run
+> hasn't been done.
+> **Also built: the E0 in-app pre-consent disclosure** (required, was missing — see D42). Gates the
+> Google button, requires an affirmative tap, states access/use/sharing inline plus the Limited Use
+> statement. Corrected the sign-in footer, which claimed *"Nothing is shared"* — untrue (redacted text
+> goes to Anthropic) and a misdescription is itself a rejection reason. **Wording still needs PM
+> sign-off before it reaches testers.** Frontend **116 tests**.
+
 > **Update 2026-07-28 — Dormant-account skip (D41) + E0 verification research (D42).**
 > **Dormant skip:** `auto_sync_tick` billed EVERY account that ever signed up, hourly, forever — the
 > cost that scales with churn rather than usage. Now skipped after `AUTO_SYNC_DORMANT_DAYS` (14) idle
