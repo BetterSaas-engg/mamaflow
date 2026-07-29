@@ -6,7 +6,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
@@ -24,6 +24,27 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Google OAuth redirect (D28 PKCE, D43 cold-start fix). This
+                 used to point at flutter_web_auth_2's CallbackActivity, which
+                 hands the URL to a STATIC in-process map and then calls
+                 finishAndRemoveTask(). If Android had killed our process while
+                 the user was on the consent screen — routine on Samsung, which
+                 parks the app in the RARE standby bucket — that map came back
+                 empty, the auth code was silently dropped, and the task was
+                 wiped, stranding the user in the browser. Verified on a real
+                 S25 Ultra: the callback cold-started, was destroyed, and the
+                 foreground went to the launcher with MainActivity never
+                 started. Delivering to MainActivity instead means the intent
+                 survives a cold start and app_links can read it.
+                 Scheme = the reversed iOS OAuth client id; Android reuses the
+                 iOS client (D30). Keep in sync with Info.plist's
+                 CFBundleURLSchemes and GOOGLE_IOS_CLIENT_ID. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.googleusercontent.apps.682580051335-t2pf5pi319mg7cfub2b5725fv907ttq7" />
+            </intent-filter>
         </activity>
         <!-- AdMob application id (google_mobile_ads). Required: its startup
              ContentProvider crashes the process without it. Google's TEST app
@@ -34,22 +55,6 @@
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-3940256099942544~3347511713" />
 
-        <!-- flutter_web_auth_2 callback: catches the Google OAuth redirect
-             (mobile PKCE sign-in, D28). Scheme = the reversed iOS OAuth client
-             id — Android reuses the iOS client, since the browser/Custom-Tab
-             flow validates the redirect scheme, not the OS, so no separate
-             Android OAuth client or SHA-1 is needed for sign-in. Must stay in
-             sync with Info.plist's CFBundleURLSchemes and GOOGLE_IOS_CLIENT_ID. -->
-        <activity
-            android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
-            android:exported="true">
-            <intent-filter android:label="flutter_web_auth_2">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.googleusercontent.apps.682580051335-t2pf5pi319mg7cfub2b5725fv907ttq7" />
-            </intent-filter>
-        </activity>
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

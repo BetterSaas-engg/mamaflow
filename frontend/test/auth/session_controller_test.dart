@@ -45,6 +45,7 @@ void main() {
 
   test('a cancelled sign-in leaves the session signed out', () async {
     when(() => auth.isSignedIn()).thenAnswer((_) async => false);
+    when(() => auth.completeInterruptedSignIn()).thenAnswer((_) async => null);
     when(() => auth.signInWithGoogle()).thenAnswer((_) async => null);
     await container.read(sessionProvider.future);
 
