@@ -6,6 +6,7 @@ stored credential are skipped (normal until A1/Secret Manager is live).
 """
 
 import asyncio
+import datetime
 import logging
 
 from sqlalchemy import select
@@ -26,9 +27,19 @@ async def auto_sync_tick(
     """One hourly pass: sync every eligible user, sequentially. Per-user
     try/except — one user's failure never stops the pass (types-only logs)."""
     async with session_factory() as db:
-        rows = await db.execute(
-            select(User.id, User.email, User.provider).where(User.deleted_at.is_(None))
+        query = select(User.id, User.email, User.provider).where(
+            User.deleted_at.is_(None)
         )
+        # Dormant accounts cost money hourly forever otherwise: the tick used
+        # to bill every user who ever signed up, whether or not they ever came
+        # back. Skipping is a pause, not a tombstone — one authenticated
+        # request re-arms the account on the next tick.
+        if settings.auto_sync_dormant_days > 0:
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+                days=settings.auto_sync_dormant_days
+            )
+            query = query.where(User.last_seen_at >= cutoff)
+        rows = await db.execute(query)
         candidates = [(row.id, row.email, row.provider) for row in rows]
 
     for user_id, email, provider in candidates:

@@ -215,3 +215,103 @@ def test_compose_body_calendar_only_still_yields_text():
     # skip them on subject alone — the original 2026-07-24 bug shape).
     out = _compose_body(_cal_payload(_ICS_TORONTO))
     assert "2026-08-06" in out
+
+
+# --- Pagination (the mechanism that fixes the silent-drop bug) ---
+#
+# The sync-level tests use fakes that bypass this loop entirely, so the loop
+# itself was untested — exactly the code whose absence caused the bug.
+
+
+class _FakeMessages:
+    """Records list() calls and serves ids in 100-id pages, like Gmail."""
+
+    def __init__(self, ids):
+        self._ids = ids
+        self.calls = []
+
+    def list(self, userId, q, maxResults, pageToken=None):
+        self.calls.append({"maxResults": maxResults, "pageToken": pageToken})
+        start = int(pageToken or 0)
+        page = self._ids[start : start + maxResults]
+        nxt = start + len(page)
+        return _FakeExec(
+            {
+                "messages": [{"id": i} for i in page],
+                **({"nextPageToken": str(nxt)} if nxt < len(self._ids) else {}),
+            }
+        )
+
+
+class _FakeExec:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def execute(self):
+        return self._payload
+
+
+class _FakeUsers:
+    def __init__(self, messages):
+        self._messages = messages
+
+    def messages(self):
+        return self._messages
+
+
+class _FakeGmail:
+    def __init__(self, messages):
+        self._users = _FakeUsers(messages)
+
+    def users(self):
+        return self._users
+
+
+def _wire_gmail(monkeypatch, ids):
+    from api.services import gmail_reader
+
+    messages = _FakeMessages(ids)
+    monkeypatch.setattr(
+        gmail_reader, "_build_gmail_client", lambda email: _FakeGmail(messages)
+    )
+    return messages
+
+
+def test_list_recent_ids_pages_past_the_first_100(monkeypatch):
+    """The original bug: one un-paginated page meant everything older was
+    never listed again, so it could never be extracted."""
+    from api.config.settings import settings as app_settings
+    from api.services import gmail_reader
+
+    monkeypatch.setattr(app_settings, "sync_scan_max_messages", 500)
+    messages = _wire_gmail(monkeypatch, [f"m{i:03d}" for i in range(250)])
+
+    ids = gmail_reader.list_recent_ids("parent@example.com")
+
+    assert len(ids) == 250  # not 100 — it followed nextPageToken
+    assert ids[0] == "m000" and ids[-1] == "m249"
+    assert [c["pageToken"] for c in messages.calls] == [None, "100", "200"]
+
+
+def test_list_recent_ids_stops_at_the_scan_cap(monkeypatch):
+    """Wide, but still bounded — the cap is what keeps a huge mailbox from
+    turning one sync into an unbounded crawl."""
+    from api.config.settings import settings as app_settings
+    from api.services import gmail_reader
+
+    monkeypatch.setattr(app_settings, "sync_scan_max_messages", 150)
+    messages = _wire_gmail(monkeypatch, [f"m{i:03d}" for i in range(400)])
+
+    ids = gmail_reader.list_recent_ids("parent@example.com")
+
+    assert len(ids) == 150
+    # Second page asks for exactly the remainder, never a wasted full page.
+    assert [c["maxResults"] for c in messages.calls] == [100, 50]
+
+
+def test_list_recent_ids_handles_an_empty_mailbox(monkeypatch):
+    from api.services import gmail_reader
+
+    _wire_gmail(monkeypatch, [])
+
+    assert gmail_reader.list_recent_ids("parent@example.com") == []

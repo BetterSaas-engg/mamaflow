@@ -20,6 +20,20 @@ from api.services.ai_extractor import ExtractionUsage
 from api.services.users import get_or_create_user
 
 
+def _wire_reader(monkeypatch, metadata):
+    """Wire the reader seam: sync lists ids first (cheap), then fetches headers
+    only for the unsynced ones. Mirrors the real contract so tests exercise the
+    same dedup-before-headers path production uses."""
+    by_id = {m["message_id"]: m for m in metadata}
+    monkeypatch.setattr(
+        sync_runner, "list_recent_ids",
+        lambda email, provider="google": list(by_id),
+    )
+    monkeypatch.setattr(
+        sync_runner, "fetch_metadata",
+        lambda email, ids, provider="google": [by_id[i] for i in ids if i in by_id],
+    )
+
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
@@ -41,9 +55,7 @@ def _wire(monkeypatch, message_ids, extract_fn):
         {"message_id": m, "sender": f"{m}@school.org", "subject": "Practice", "date": "Mon"}
         for m in message_ids
     ]
-    monkeypatch.setattr(
-        sync_runner, "fetch_recent_metadata", lambda email, provider="google": metadata
-    )
+    _wire_reader(monkeypatch, metadata)
     monkeypatch.setattr(
         sync_runner,
         "fetch_message_bodies",

@@ -157,7 +157,8 @@ def fake_imap(monkeypatch):
 def test_metadata_returns_decoded_headers_and_message_ids():
     FakeIMAP.messages = {b"1": PLAIN_MSG, b"2": ENCODED_MSG}
 
-    meta = imap_reader.fetch_recent_metadata(EMAIL, "yahoo")
+    ids = imap_reader.list_recent_ids(EMAIL, "yahoo")
+    meta = imap_reader.fetch_metadata(EMAIL, ids, "yahoo")
 
     by_id = {m["message_id"]: m for m in meta}
     assert by_id["abc123@school.org"]["subject"] == "Practice Thursday"
@@ -170,7 +171,7 @@ def test_metadata_pass_never_fetches_bodies():
     """Executable metadata-first invariant: header pass = zero full-body FETCH."""
     FakeIMAP.messages = {b"1": PLAIN_MSG}
 
-    imap_reader.fetch_recent_metadata(EMAIL, "yahoo")
+    imap_reader.list_recent_ids(EMAIL, "yahoo")
 
     conn = FakeIMAP.instances[0]
     assert not any("BODY.PEEK[]" in c for c in conn.commands)
@@ -180,7 +181,7 @@ def test_metadata_pass_never_fetches_bodies():
 def test_mailbox_is_never_mutated():
     FakeIMAP.messages = {b"1": PLAIN_MSG}
 
-    imap_reader.fetch_recent_metadata(EMAIL, "yahoo")
+    imap_reader.list_recent_ids(EMAIL, "yahoo")
     imap_reader.fetch_message_bodies(EMAIL, ["abc123@school.org"], "yahoo")
 
     for conn in FakeIMAP.instances:
@@ -222,11 +223,11 @@ def test_quoted_printable_body_is_decoded():
 def test_missing_message_id_falls_back_to_stable_hash():
     FakeIMAP.messages = {b"5": NO_MSGID_MSG}
 
-    first = imap_reader.fetch_recent_metadata(EMAIL, "yahoo")
-    second = imap_reader.fetch_recent_metadata(EMAIL, "yahoo")
+    first = imap_reader.list_recent_ids(EMAIL, "yahoo")
+    second = imap_reader.list_recent_ids(EMAIL, "yahoo")
 
-    assert first[0]["message_id"].startswith("imap-")
-    assert first[0]["message_id"] == second[0]["message_id"]  # stable across syncs
+    assert first[0].startswith("imap-")
+    assert first[0] == second[0]  # stable across syncs
 
 
 def test_vanished_message_is_omitted_not_raised():
@@ -241,20 +242,52 @@ def test_revoked_app_password_raises_reauth():
     FakeIMAP.fail_login = True
 
     with pytest.raises(ReauthRequired):
-        imap_reader.fetch_recent_metadata(EMAIL, "yahoo")
+        imap_reader.list_recent_ids(EMAIL, "yahoo")
 
 
 def test_missing_credential_raises_reauth():
     with pytest.raises(ReauthRequired):
-        imap_reader.fetch_recent_metadata("nobody@rogers.com", "yahoo")
+        imap_reader.list_recent_ids("nobody@rogers.com", "yahoo")
 
 
 def test_google_shaped_credential_is_rejected():
     store_token("mixed@rogers.com", {"token": "ya29"}, provider="yahoo")  # wrong kind
 
     with pytest.raises(ReauthRequired):
-        imap_reader.fetch_recent_metadata("mixed@rogers.com", "yahoo")
+        imap_reader.list_recent_ids("mixed@rogers.com", "yahoo")
 
 
 def test_since_date_uses_english_months(monkeypatch):
     assert imap_reader._since_date().split("-")[1] in imap_reader._MONTHS
+
+
+def test_listing_then_fetching_metadata_scans_the_window_once():
+    """Gmail gets ids from a cheap id-only list call; IMAP must fetch headers
+    to know an id at all. Doing that scan twice per sync (once to list, once to
+    re-resolve) doubled IMAP header cost over a 10x wider window — a real
+    regression for Yahoo/iCloud/Rogers users on every hourly tick."""
+    FakeIMAP.messages = {b"1": PLAIN_MSG, b"2": ENCODED_MSG}
+
+    ids = imap_reader.list_recent_ids(EMAIL, "yahoo")
+    meta = imap_reader.fetch_metadata(EMAIL, ids, "yahoo")
+
+    assert {m["message_id"] for m in meta} == set(ids)  # same data, still correct
+    header_fetches = [
+        c
+        for conn in FakeIMAP.instances
+        for c in conn.commands
+        if "FETCH" in c and "HEADER.FIELDS" in c
+    ]
+    assert len(header_fetches) == 1, (
+        f"scanned the window {len(header_fetches)}x for one sync"
+    )
+
+
+def test_a_later_sync_rescans_rather_than_serving_stale_headers():
+    """The reuse must not turn into a cache that hides new mail."""
+    FakeIMAP.messages = {b"1": PLAIN_MSG}
+    imap_reader.list_recent_ids(EMAIL, "yahoo")
+    imap_reader.fetch_metadata(EMAIL, ["abc123@school.org"], "yahoo")
+
+    FakeIMAP.messages = {b"1": PLAIN_MSG, b"2": ENCODED_MSG}  # new mail arrives
+    assert len(imap_reader.list_recent_ids(EMAIL, "yahoo")) == 2

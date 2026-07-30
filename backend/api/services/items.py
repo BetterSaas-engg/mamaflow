@@ -87,6 +87,46 @@ async def mark_message_synced(
     await db.commit()
 
 
+async def mark_messages_blocked(
+    db: AsyncSession,
+    user_id,
+    message_ids: list[str],
+) -> None:
+    """Record that these messages were rejected by the sender blocklist, so
+    they stop re-entering the per-run window.
+
+    Without this, blocked ids were never marked and stayed "unsynced" for the
+    whole 30-day query window. Because the run selects the OLDEST unsynced ids
+    first, a user with more in-window blocked mail than the per-run cap had
+    every batch saturated by the same blocked ids forever — real mail newer
+    than them was never reached. That is the silent-drop bug this window fix
+    exists to close, re-created through a different door (2026-07-28 audit).
+
+    Deliberately the same marker table as a success: both mean "we have made a
+    terminal decision about this message and never need to look again". No body
+    was fetched, so this stores no content. If the blocklist itself changes,
+    already-classified mail is not reconsidered — the same trade-off the D36
+    gate already makes, and the blocklist is structural (D13), not a user knob.
+    """
+    if not message_ids:
+        return
+    existing = await db.execute(
+        select(SyncedMessage.source_message_id).where(
+            SyncedMessage.user_id == user_id,
+            SyncedMessage.source_message_id.in_(message_ids),
+            SyncedMessage.deleted_at.is_(None),
+        )
+    )
+    seen = {row[0] for row in existing}
+    new = [m for m in message_ids if m not in seen]
+    if not new:
+        return
+    db.add_all(
+        SyncedMessage(user_id=user_id, source_message_id=m) for m in new
+    )
+    await db.commit()
+
+
 async def record_message_failure(
     db: AsyncSession,
     user_id,

@@ -2,6 +2,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:mamaflow/auth/google_auth_codes.dart';
+import 'package:mamaflow/auth/pending_oauth.dart';
 
 const _clientId = '12345-abcdef.apps.googleusercontent.com';
 
@@ -19,7 +20,12 @@ void main() {
       return '$callbackUrlScheme:/oauth2redirect?code=C123&state=$state';
     }
 
-    final codes = WebAuthPkceCodes(iosClientId: _clientId, authenticate: fake);
+    final codes = WebAuthPkceCodes(
+      iosClientId: _clientId,
+      authenticate: fake,
+      pendingStore: InMemoryPendingOAuthStore(),
+      useDeepLinkRedirect: false,
+    );
     final result = await codes.obtainAuthorizationCode();
 
     expect(result!.code, 'C123');
@@ -39,7 +45,12 @@ void main() {
       throw PlatformException(code: 'CANCELED');
     }
 
-    final codes = WebAuthPkceCodes(iosClientId: _clientId, authenticate: fake);
+    final codes = WebAuthPkceCodes(
+      iosClientId: _clientId,
+      authenticate: fake,
+      pendingStore: InMemoryPendingOAuthStore(),
+      useDeepLinkRedirect: false,
+    );
 
     expect(await codes.obtainAuthorizationCode(), isNull);
   });
@@ -52,13 +63,22 @@ void main() {
     }) async =>
         '$callbackUrlScheme:/oauth2redirect?code=C123&state=attacker-forged';
 
-    final codes = WebAuthPkceCodes(iosClientId: _clientId, authenticate: fake);
+    final codes = WebAuthPkceCodes(
+      iosClientId: _clientId,
+      authenticate: fake,
+      pendingStore: InMemoryPendingOAuthStore(),
+      useDeepLinkRedirect: false,
+    );
 
     await expectLater(codes.obtainAuthorizationCode(), throwsStateError);
   });
 
   test('fails loudly when the client id dart-define is missing', () async {
-    final codes = WebAuthPkceCodes(iosClientId: '');
+    final codes = WebAuthPkceCodes(
+      iosClientId: '',
+      pendingStore: InMemoryPendingOAuthStore(),
+      useDeepLinkRedirect: false,
+    );
 
     await expectLater(codes.obtainAuthorizationCode(), throwsStateError);
   });

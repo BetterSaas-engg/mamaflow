@@ -5,6 +5,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from api.auth.token_store import get_token
+from api.config.settings import settings
 from api.services.email_body import calendar_summary_from_ics, compose_body
 from api.services.google_token import ensure_fresh
 
@@ -102,29 +103,47 @@ def _compose_body(payload: dict) -> str:
     return compose_body(_extract_plain_text(payload), _extract_calendar_summary(payload))
 
 
-def _list_recent_ids(gmail) -> list[str]:
+def list_recent_ids(user_email: str) -> list[str]:
+    """Message ids in the last 30 days, newest first — ids ONLY, no headers,
+    no bodies (one cheap API call per 100 ids).
+
+    Paginated to settings.sync_scan_max_messages. A single un-paginated page of
+    50 used to mean anything older than the newest 50 was never listed again
+    once those were synced, so it could never be extracted — silently. The
+    caller dedups these ids against the DB before fetching any headers.
+    """
+    gmail = _build_gmail_client(user_email)
     thirty_days_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)
     query = f"after:{int(thirty_days_ago.timestamp())}"
 
-    results = gmail.users().messages().list(
-        userId="me",
-        q=query,
-        maxResults=MAX_PREVIEW_MESSAGES,
-    ).execute()
+    ids: list[str] = []
+    page_token = None
+    while len(ids) < settings.sync_scan_max_messages:
+        results = gmail.users().messages().list(
+            userId="me",
+            q=query,
+            maxResults=min(100, settings.sync_scan_max_messages - len(ids)),
+            pageToken=page_token,
+        ).execute()
+        ids.extend(m["id"] for m in results.get("messages", []))
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
+    return ids[: settings.sync_scan_max_messages]
 
-    return [m["id"] for m in results.get("messages", [])]
 
-
-def fetch_recent_metadata(user_email: str) -> list[dict]:
-    """List the last 30 days of messages with HEADERS ONLY (format="metadata").
+def fetch_metadata(user_email: str, message_ids: list[str]) -> list[dict]:
+    """Headers ONLY (format="metadata") for the given ids.
 
     No body is fetched here. The caller checks each sender against the blocklist
     and fetches the body ONLY for senders that pass (AGENTS.md: metadata-first;
     a blocked sender's body is never pulled).
     """
+    if not message_ids:
+        return []
     gmail = _build_gmail_client(user_email)
     metadata = []
-    for message_id in _list_recent_ids(gmail):
+    for message_id in message_ids:
         msg = gmail.users().messages().get(
             userId="me",
             id=message_id,

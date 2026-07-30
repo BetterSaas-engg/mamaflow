@@ -7,7 +7,16 @@ import 'auth_service.dart';
 /// at startup; flipped by sign-in / sign-out. The auth gate watches this.
 class SessionController extends AsyncNotifier<bool> {
   @override
-  Future<bool> build() => ref.read(authServiceProvider).isSignedIn();
+  Future<bool> build() async {
+    final auth = ref.read(authServiceProvider);
+    if (await auth.isSignedIn()) return true;
+    // Not signed in — but this launch may BE the OAuth redirect coming back
+    // after Android killed us mid-consent (D43). Without this the user, having
+    // just successfully consented, would be dropped back on the sign-in screen
+    // with no explanation. Returns null on a normal launch.
+    final recovered = await auth.completeInterruptedSignIn();
+    return recovered != null;
+  }
 
   /// Null means the user cancelled the consent sheet — the session stays
   /// signed out and the caller shows no error.

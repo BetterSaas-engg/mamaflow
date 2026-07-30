@@ -350,6 +350,86 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-28 — Android OAuth redirect FIXED (D43) + E0 pre-consent disclosure built.**
+> The long-standing "Chrome finishes Google sign-in but never returns to the app" bug is solved, with
+> the root cause **confirmed on the PM's own S25 Ultra** rather than inferred. flutter_web_auth_2's
+> `CallbackActivity` hands the redirect to a **static in-process map** and then calls
+> `finishAndRemoveTask()`. While the user is on the consent screen the app is backgrounded and Android
+> may kill it — routine on this device, which parks the app in the **RARE standby bucket**. The
+> redirect then cold-starts the process, the map is empty, the auth code is silently dropped, and the
+> task is wiped. Reproduced with the process dead: `CallbackActivity` cold-started, was destroyed, and
+> `topResumedActivity` became the Samsung launcher, MainActivity never running. After the fix the
+> identical test lands on `.MainActivity`, no crash, `CallbackActivity` gone entirely.
+> **Fix:** redirect intent-filter moved to MainActivity (`singleTask`); PKCE verifier + state
+> persisted to Keystore **before** the browser opens (they were local variables that died with the
+> process); `app_links` delivers the cold-start initial link; `recoverPendingAuthorization()` finishes
+> the sign-in at startup, keeping the RFC 8252 state check and consuming the record so a code can't be
+> replayed. **iOS untouched** — its `ASWebAuthenticationSession` returns in-process and never had this
+> failure. **The earlier R8/ProGuard hypothesis was wrong**: the original `resolve-activity` check used
+> the wrong package name, so that evidence was worthless; re-checked correctly, the activity always
+> resolved. Commit `a048c74`. **Still needs a human for end-to-end proof** — the structural half is
+> verified on-device and the recovery logic is unit-tested, but a real consent → kill → recover run
+> hasn't been done.
+> **Also built: the E0 in-app pre-consent disclosure** (required, was missing — see D42). Gates the
+> Google button, requires an affirmative tap, states access/use/sharing inline plus the Limited Use
+> statement. Corrected the sign-in footer, which claimed *"Nothing is shared"* — untrue (redacted text
+> goes to Anthropic) and a misdescription is itself a rejection reason. **Wording still needs PM
+> sign-off before it reaches testers.** Frontend **116 tests**.
+
+> **Update 2026-07-28 — Dormant-account skip (D41) + E0 verification research (D42).**
+> **Dormant skip:** `auto_sync_tick` billed EVERY account that ever signed up, hourly, forever — the
+> cost that scales with churn rather than usage. Now skipped after `AUTO_SYNC_DORMANT_DAYS` (14) idle
+> days and re-armed by a single authenticated request; migration `a8f1c2d43e70` verified against a
+> real Postgres 16 (full chain, downgrade, and the production-shaped case of a pre-existing row
+> backfilling to "seen now" so current testers aren't wrongly skipped). **The security audit returned
+> a BLOCK on my first cut and it was right:** the liveness write ran on the request's session and
+> rolled back on failure, but `rollback()` expires every loaded attribute — including the `user` the
+> auth dependency returns — so the endpoint's next `user.id` raised `MissingGreenlet`. A transient DB
+> blip would have become a guaranteed 500 across all authenticated traffic, the opposite of what the
+> code's own comment claimed. The write now uses its own session. The regression test is proven
+> non-vacuous against a faithful reproduction (my first reproduction attempt let the commit succeed,
+> which made rollback a no-op and the test vacuous — worth remembering as a way to fool yourself).
+> Backend **302 tests**. Commits `3e5d292`, `5d6fa6a`.
+> **E0 research (`docs/e0-oauth-verification.md` rewritten):** two findings change the plan.
+> (a) Testing-mode **refresh tokens expire 7 days after consent** — so Google testers must re-consent
+> weekly; if a tester says the app went quiet after a week, that is this, not a sync bug. (b) The
+> unverified **100-user cap is a project-LIFETIME counter that cannot be reset**, so publishing early
+> to dodge (a) would burn it permanently. Decision: stay in Testing, accept the weekly re-auth, and
+> lean on IMAP onboarding (D38) — those users are off Google's track entirely. CASA is unavoidable
+> (~$675–855 **annually**, Tier 2/AL1, 6 weeks–3 months; Google triggers it, we cannot start it).
+> **Gap found: the in-app pre-consent disclosure screen is required and we don't have one** — a
+> Flutter change needing PM sign-off on wording. Pleasant surprise: the D19 ad firewall is verbatim
+> Google's Limited Use criterion, so it's an asset to lead with in the scope justification.
+
+> **Update 2026-07-28 — Silent message-drop FIXED (D40).** The correctness bug logged in passing on
+> 07-27 turned out to be worse than filed. `_list_recent_ids` fetched **one un-paginated page** of the
+> newest 50 in the 30-day window, so once those synced, everything older was never listed again and
+> could never be extracted. The worst case is not an edge case: a **new user's 30-day backlog** of
+> hundreds of emails, of which only the newest 50 ever process — silently breaking the core promise.
+> **Fix:** the reader contract splits into `list_recent_ids` (ids only, paginated to
+> `SYNC_SCAN_MAX_MESSAGES=500`) + `fetch_metadata` (headers for given ids), so the runner dedups on
+> **ids before fetching any headers**; the run stays bounded at `SYNC_MAX_MESSAGES_PER_RUN=50`,
+> processed **oldest-first** so a backlog drains in arrival order, remainder logged as queued. Side
+> benefit: a quiet inbox costs one list call per sync instead of re-fetching headers for the whole
+> window hourly. Commit `bcbb082`.
+> **The security audit then caught the fix re-creating the bug through a different door** — and
+> proved it by simulation rather than inspection: blocked senders were never marked, so they stayed
+> "unsynced" for the whole window and, under oldest-first selection, permanently saturated every
+> batch once in-window blocked volume exceeded 50 — which the seed blocklist
+> (linkedin/amazon/shopify/etsy) makes ordinary. Real mail newer than them would never be reached, no
+> matter how many runs ran. Blocked ids are now retired into the same marker table as successes (both
+> are terminal verdicts; no body was fetched, so no content is stored). The audit also caught an IMAP
+> cost regression: a message id IS a header there, so `list_recent_ids` and `fetch_metadata` were each
+> scanning the full window — **double** header cost per sync over a 10× wider window for every
+> Yahoo/iCloud/Rogers user, hourly. They now share one scan via a single-use TTL'd handoff. Commit
+> `c01000b`. Backend **295 tests**, including the first direct coverage of the Gmail pagination loop
+> (previously exercised only through fakes that bypassed it) and a mixed blocked/real backlog test
+> that reproduces the starvation.
+> **Known bound, deliberately left:** mail beyond position **500** in the 30-day window is still never
+> listed — fine below ~16 emails/day, not above. Raising `SYNC_SCAN_MAX_MESSAGES` costs only cheap
+> Gmail list calls (Claude spend stays capped by the per-run bound) but widens the dedup `IN` clause,
+> so it wants chunking first. **Decide this before public launch, not after.**
+
 > **Update 2026-07-27 — Extraction cost bug FIXED (D39): ~$24 → ~$2.82/user/month.** PM flagged
 > 3 test users burning ~$2.40 USD/day. Investigation (token-counted, not guessed) ruled out model
 > and email size — measured per-call cost is $0.0037, implying **~216 calls/user/day** against

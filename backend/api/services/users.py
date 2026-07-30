@@ -1,10 +1,16 @@
 """User lookup/creation for the mobile auth flow."""
 
-from sqlalchemy import select
+import datetime
+import logging
+
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config.settings import settings
 from api.models.user import User
+
+_log = logging.getLogger(__name__)
 
 
 def normalize_email(email: str) -> str:
@@ -61,3 +67,44 @@ async def get_or_create_user(
         return winner
     await db.refresh(user)
     return user
+
+
+async def touch_last_seen(session_factory, user_id, last_seen) -> None:
+    """Record that this user is active, throttled to one write per window.
+
+    Called from the auth dependency, so it runs on EVERY authenticated
+    request — an unthrottled write would add a round trip and a row update to
+    every API call for a value that only needs day-level accuracy.
+
+    Auto-sync reads this to skip dormant accounts; without it, a user who
+    signed up once and never returned kept costing Claude calls hourly forever.
+
+    Deliberately opens its OWN session instead of reusing the request's. Two
+    reasons, both found by the 2026-07-28 audit: (1) committing on the request
+    session would sweep in anything a later-added dependency had staged, and
+    (2) on failure the obvious `rollback()` EXPIRES every loaded object,
+    including the `user` this dependency is about to return — so the next
+    plain `user.id` in the endpoint raises MissingGreenlet and 500s the
+    request. That turned a transient DB blip into a guaranteed failure of all
+    authenticated traffic, the exact opposite of the intent. With its own
+    session, a failure here cannot touch the request at all.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if last_seen is not None:
+        # Rows written before this column existed can come back naive.
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=datetime.timezone.utc)
+        if (now - last_seen).total_seconds() < settings.last_seen_throttle_seconds:
+            return
+    try:
+        async with session_factory() as session:
+            await session.execute(
+                update(User).where(User.id == user_id).values(last_seen_at=now)
+            )
+            await session.commit()
+    except Exception as exc:
+        # Liveness bookkeeping is never worth failing a request over. Types
+        # only, no PII (audit log rule).
+        _log.warning(
+            "could not record liveness for user %s (%s)", user_id, type(exc).__name__
+        )
