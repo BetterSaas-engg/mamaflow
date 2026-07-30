@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../account/account_providers.dart';
+import '../account/mailboxes_screen.dart';
 import '../auth/session_controller.dart';
 
 /// Account settings: connected email, sign out, and delete account.
@@ -19,6 +20,16 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.account_circle_outlined),
             title: const Text('Signed in as'),
             subtitle: Text(email.value ?? '—'),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.alternate_email),
+            title: const Text('Email accounts'),
+            subtitle: const Text('Choose which inboxes Mamaflow reads'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MailboxesScreen()),
+            ),
           ),
           const Divider(height: 1),
           ListTile(
