@@ -12,10 +12,10 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.auth.token_store import get_token
 from api.config.settings import settings
 from api.models.user import User
 from api.services import sync_state
+from api.services.mail_connections import connection_count
 from api.services.sync_runner import run_sync_job
 
 _log = logging.getLogger(__name__)
@@ -44,10 +44,15 @@ async def auto_sync_tick(
 
     for user_id, email, provider in candidates:
         try:
-            # Secret Manager reads are blocking network I/O — off the loop.
-            token = await asyncio.to_thread(get_token, email, provider)
-            if token is None:
-                _log.debug("auto-sync: no stored token for user %s", user_id)
+            # Eligibility is "has at least one mailbox", not "the identity
+            # address has a credential" (D44): a user's mailboxes can all be
+            # addresses other than users.email, and the old check skipped them
+            # entirely. Per-mailbox credential problems are handled inside the
+            # job, which keeps the healthy mailboxes syncing.
+            async with session_factory() as db:
+                mailboxes = await connection_count(db, user_id)
+            if not mailboxes:
+                _log.debug("auto-sync: no connected mailbox for user %s", user_id)
                 continue
             outcome, _retry = sync_state.try_start(
                 user_id, cooldown_seconds=settings.sync_cooldown_seconds

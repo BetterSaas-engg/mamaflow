@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import token_store
 from api.models.device import Device
 from api.models.item import Item
+from api.models.mail_connection import MailConnection
 from api.models.user import User
+from api.services.mail_connections import list_connections
 
 _log = logging.getLogger(__name__)
 
@@ -39,12 +41,25 @@ async def delete_account(db: AsyncSession, user: User) -> None:
     and drop the Gmail token."""
     now = datetime.datetime.now(datetime.UTC)
 
+    # Read the mailboxes BEFORE soft-deleting them — afterwards
+    # list_connections filters them out and their credentials would be
+    # unreachable, i.e. leaked.
+    connections = await list_connections(db, user.id)
+
     await db.execute(
         update(Item).where(Item.user_id == user.id, Item.deleted_at.is_(None))
         .values(deleted_at=now)
     )
     await db.execute(
         update(Device).where(Device.user_id == user.id, Device.deleted_at.is_(None))
+        .values(deleted_at=now)
+    )
+    await db.execute(
+        update(MailConnection)
+        .where(
+            MailConnection.user_id == user.id,
+            MailConnection.deleted_at.is_(None),
+        )
         .values(deleted_at=now)
     )
     user.deleted_at = now
@@ -55,11 +70,31 @@ async def delete_account(db: AsyncSession, user: User) -> None:
     # Google: revoke at Google, then delete the stored token. IMAP providers
     # have no server-side revoke for app passwords — the frontend deletion copy
     # tells the user to revoke the app password at their provider.
+    # Every mailbox, not just the identity address. Since D44 a user can hold
+    # several connections whose emails differ from users.email, and purging
+    # only the identity address would leave those credentials live after the
+    # account was deleted — the D38 stale-credential class, at the worst
+    # possible moment.
+    for connection in connections:
+        creds = await asyncio.to_thread(
+            token_store.get_token, connection.email, connection.provider
+        )
+        if creds is not None and connection.provider == "google":
+            try:
+                await asyncio.to_thread(revoke_gmail_token, creds)
+            except Exception as exc:  # defensive: revoke_gmail_token shouldn't raise
+                _log.warning("gmail token revoke raised (%s)", type(exc).__name__)
+        await asyncio.to_thread(
+            token_store.delete_all_tokens, connection.email
+        )
+
+    # Backstop for the identity address itself: a credential can predate the
+    # connections table, or outlive a mailbox the user disconnected earlier.
     creds = await asyncio.to_thread(token_store.get_token, user.email)
     if creds is not None:
         try:
             await asyncio.to_thread(revoke_gmail_token, creds)
-        except Exception as exc:  # defensive: revoke_gmail_token shouldn't raise
+        except Exception as exc:
             _log.warning("gmail token revoke raised (%s)", type(exc).__name__)
     # Purge credentials under EVERY provider — not just the current one — so
     # nothing survives account deletion, regardless of which providers the

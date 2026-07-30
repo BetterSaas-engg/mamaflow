@@ -29,11 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.jwt import create_access_token
 from api.auth.oauth import MobileAuthResponse, MobileAuthUser
-from api.auth.token_store import delete_other_tokens, store_token
+from api.auth.token_store import store_token
 from api.config.settings import settings
 from api.db.session import get_db
 from api.services import auth_throttle
 from api.services.mail_providers import get_provider
+from api.services.mail_connections import ensure_connection
 from api.services.users import get_or_create_user, normalize_email
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -98,6 +99,19 @@ def _verify_imap_login(host: str, port: int, username: str, password: str) -> No
             conn.logout()
         except Exception:
             pass
+
+
+async def verify_and_store_imap_mailbox(payload: "ImapAuthRequest", request: Request):
+    """Throttle, validate, prove the credential against the real IMAP server,
+    and store it. Returns (provider, email).
+
+    Shared by sign-in and by adding a mailbox to an existing account (D44), so
+    the two paths cannot drift on validation, throttling or error wording — the
+    credential surface is the same one either way.
+    """
+    provider, email = await verify_and_store_imap_mailbox(payload, request)
+
+    return provider, email
 
 
 @router.post("/imap", response_model=MobileAuthResponse)
@@ -168,10 +182,13 @@ async def imap_auth(
     # Blocking gRPC on the secret-manager backend — off the loop (D4 path,
     # same as Google tokens).
     await asyncio.to_thread(store_token, user.email, credential, provider.key)
-    # One active mail source per user (Phase 1): purge any credential left
-    # under a different provider (google, or another IMAP provider) so a
-    # provider switch never leaves a live app password behind.
-    await asyncio.to_thread(delete_other_tokens, user.email, provider.key)
+    # Record the mailbox (D44). This no longer purges other providers: a user
+    # may hold several mailboxes now, and sign-in only ever (re)connects THIS
+    # one. Re-authenticating an existing mailbox is never blocked by the cap;
+    # ensure_connection also destroys a superseded credential if the same
+    # address comes back under a different provider, which is what keeps the
+    # D38 stale-app-password guarantee once purge-on-switch is gone.
+    await ensure_connection(db, user, provider.key, user.email)
 
     token = create_access_token(subject=str(user.id), email=user.email)
     return MobileAuthResponse(

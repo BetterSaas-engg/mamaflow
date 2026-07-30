@@ -23,6 +23,7 @@ import uuid
 
 from api.config.settings import settings as app_settings
 from api.services import auto_sync, sync_state
+from api.services.mail_connections import ensure_connection
 from api.services.users import get_or_create_user
 
 
@@ -34,19 +35,18 @@ class _JobRecorder:
         self.calls.append((user_id, user_email))
 
 
-async def test_tick_syncs_token_holders_and_skips_tokenless(
+async def test_tick_syncs_users_with_a_mailbox_and_skips_those_without(
     db, session_factory, monkeypatch
 ):
     a = await get_or_create_user(db, "a@x.com")
-    b = await get_or_create_user(db, "b@x.com")
+    b = await get_or_create_user(db, "b@x.com")  # noqa: F841 — deliberately mailbox-less
     await db.commit()
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
 
-    # Only A has a stored Gmail token.
-    monkeypatch.setattr(
-        auto_sync, "get_token", lambda email, provider="google": {"token": "t"} if email == "a@x.com" else None
-    )
+    # Only A has a connected mailbox; B signed up but never connected one, and
+    # syncing them would be pure cost for no possible result.
+    await ensure_connection(db, a, "google", a.email)
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -59,11 +59,11 @@ async def test_tick_skips_soft_deleted_users(db, session_factory, monkeypatch):
     import datetime
 
     u = await get_or_create_user(db, "gone@x.com")
+    await ensure_connection(db, u, "google", u.email)
     u.deleted_at = datetime.datetime.now(datetime.UTC)
     await db.commit()
     sync_state._states.clear()
 
-    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -74,11 +74,11 @@ async def test_tick_skips_soft_deleted_users(db, session_factory, monkeypatch):
 
 async def test_tick_respects_running_and_cooldown(db, session_factory, monkeypatch):
     u = await get_or_create_user(db, "busy@x.com")
+    await ensure_connection(db, u, "google", u.email)
     await db.commit()
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 3600)
 
-    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -100,18 +100,22 @@ async def test_one_user_failure_does_not_stop_the_pass(
 ):
     await get_or_create_user(db, "boom@x.com")
     ok = await get_or_create_user(db, "ok@x.com")
+    await ensure_connection(db, ok, "google", ok.email)
     await db.commit()
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
 
-    def token_or_boom(email, provider="google"):
-        if email == "boom@x.com":
-            raise RuntimeError("secret manager down")
-        return {"token": "t"}
-
-    monkeypatch.setattr(auto_sync, "get_token", token_or_boom)
+    # One user's sync blows up; the pass must carry on to the next.
     recorder = _JobRecorder()
-    monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
+    original = recorder.__call__
+
+    async def boom_for_one(user_id, user_email, session_factory):
+        if user_email == "boom@x.com":
+            raise RuntimeError("secret manager down")
+        await original(user_id, user_email, session_factory)
+
+    recorder.__call__ = boom_for_one
+    monkeypatch.setattr(auto_sync, "run_sync_job", boom_for_one)
 
     await auto_sync.auto_sync_tick(session_factory)
 
@@ -195,7 +199,9 @@ async def test_tick_skips_users_dormant_past_the_cutoff(
     db, session_factory, monkeypatch
 ):
     active = await get_or_create_user(db, "active@x.com")
+    await ensure_connection(db, active, "google", active.email)
     dormant = await get_or_create_user(db, "dormant@x.com")
+    await ensure_connection(db, dormant, "google", dormant.email)
     active.last_seen_at = _days_ago(1)
     dormant.last_seen_at = _days_ago(30)
     await db.commit()
@@ -203,7 +209,6 @@ async def test_tick_skips_users_dormant_past_the_cutoff(
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 14)
 
-    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -217,12 +222,12 @@ async def test_a_dormant_user_who_returns_is_synced_again(
 ):
     """Dormancy must be a pause, not a tombstone — opening the app resumes it."""
     u = await get_or_create_user(db, "back@x.com")
+    await ensure_connection(db, u, "google", u.email)
     u.last_seen_at = _days_ago(30)
     await db.commit()
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 14)
-    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -243,11 +248,11 @@ async def test_a_brand_new_user_is_never_treated_as_dormant(
 ):
     """Signing up must not require a second visit before the first sync."""
     u = await get_or_create_user(db, "new@x.com")
+    await ensure_connection(db, u, "google", u.email)
     await db.commit()
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 14)
-    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 
@@ -259,12 +264,12 @@ async def test_a_brand_new_user_is_never_treated_as_dormant(
 async def test_dormancy_can_be_disabled(db, session_factory, monkeypatch):
     """0 = never skip, the escape hatch if this ever hides real syncs."""
     u = await get_or_create_user(db, "old@x.com")
+    await ensure_connection(db, u, "google", u.email)
     u.last_seen_at = _days_ago(365)
     await db.commit()
     sync_state._states.clear()
     monkeypatch.setattr(app_settings, "sync_cooldown_seconds", 0)
     monkeypatch.setattr(app_settings, "auto_sync_dormant_days", 0)
-    monkeypatch.setattr(auto_sync, "get_token", lambda email, provider="google": {"token": "t"})
     recorder = _JobRecorder()
     monkeypatch.setattr(auto_sync, "run_sync_job", recorder)
 

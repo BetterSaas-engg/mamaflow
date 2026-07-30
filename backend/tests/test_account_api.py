@@ -11,6 +11,7 @@ from api.models.item import Item
 from api.schemas.family_event import FamilyItem
 from api.services import account as account_service
 from api.services.items import persist_items
+from api.services.mail_connections import ensure_connection
 from api.services.users import get_or_create_user
 
 
@@ -143,9 +144,6 @@ async def test_delete_account_purges_credentials_under_all_providers(client, db,
 async def test_me_reports_free_tier_limits_by_default(client, db, monkeypatch):
     """Everyone starts free: 1 mailbox, 1 member, ads on."""
     user, token = await _user_with_token(db)
-    monkeypatch.setattr(
-        "api.services.mailboxes.get_token", lambda email, provider: None
-    )
 
     body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
 
@@ -163,9 +161,7 @@ async def test_me_shows_the_free_cap_reached_once_a_mailbox_is_connected(
     client, db, monkeypatch
 ):
     user, token = await _user_with_token(db)
-    monkeypatch.setattr(
-        "api.services.mailboxes.get_token", lambda email, provider: {"token": "t"}
-    )
+    await ensure_connection(db, user, 'google', user.email)
 
     body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
 
@@ -177,9 +173,7 @@ async def test_me_reflects_a_paid_tier(client, db, monkeypatch):
     user, token = await _user_with_token(db)
     user.tier = "family"
     await db.commit()
-    monkeypatch.setattr(
-        "api.services.mailboxes.get_token", lambda email, provider: {"token": "t"}
-    )
+    await ensure_connection(db, user, 'google', user.email)
 
     body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
 
@@ -196,9 +190,6 @@ async def test_me_degrades_an_unknown_tier_to_free(client, db, monkeypatch):
     user, token = await _user_with_token(db)
     user.tier = "enterprise-lol"
     await db.commit()
-    monkeypatch.setattr(
-        "api.services.mailboxes.get_token", lambda email, provider: None
-    )
 
     body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
 
@@ -207,18 +198,26 @@ async def test_me_degrades_an_unknown_tier_to_free(client, db, monkeypatch):
     assert body["ads_enabled"] is True
 
 
-async def test_a_revoked_credential_frees_the_mailbox_slot(client, db, monkeypatch):
-    """The count is computed from the credential store, not stored. A revoked
-    app password must not leave the user wedged at their own cap."""
+async def test_disconnecting_a_mailbox_frees_the_slot(client, db, monkeypatch):
+    """Since mail_connections the slot is released by an explicit disconnect,
+    not by a credential silently going bad — the user can see and undo it."""
     user, token = await _user_with_token(db)
+    conn = await ensure_connection(db, user, "google", user.email)
     monkeypatch.setattr(
-        "api.services.mailboxes.get_token", lambda email, provider: None
+        "api.services.mail_connections.delete_token", lambda email, provider: None
     )
 
-    body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+    before = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+    assert before["mailboxes"]["can_add_another"] is False
 
-    assert body["mailboxes"]["connected"] == 0
-    assert body["mailboxes"]["can_add_another"] is True
+    resp = await client.delete(
+        f"/api/v1/account/mailboxes/{conn.id}", headers=_auth(token)
+    )
+    assert resp.status_code == 204
+
+    after = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+    assert after["mailboxes"]["connected"] == 0
+    assert after["mailboxes"]["can_add_another"] is True
 
 
 async def test_me_requires_authentication(client):
