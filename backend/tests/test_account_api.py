@@ -135,3 +135,91 @@ async def test_delete_account_purges_credentials_under_all_providers(client, db,
     assert token_store.get_token(user.email, "yahoo") is None
     assert token_store.get_token(user.email, "icloud") is None
     assert token_store.get_token(user.email) is None  # google key too
+
+
+# --- Plan / mailbox usage (D44) ---
+
+
+async def test_me_reports_free_tier_limits_by_default(client, db, monkeypatch):
+    """Everyone starts free: 1 mailbox, 1 member, ads on."""
+    user, token = await _user_with_token(db)
+    monkeypatch.setattr(
+        "api.services.mailboxes.get_token", lambda email, provider: None
+    )
+
+    body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+
+    assert body["tier"] == "free"
+    assert body["ads_enabled"] is True
+    assert body["member_limit"] == 1
+    assert body["mailboxes"] == {
+        "connected": 0,
+        "limit": 1,
+        "can_add_another": True,
+    }
+
+
+async def test_me_shows_the_free_cap_reached_once_a_mailbox_is_connected(
+    client, db, monkeypatch
+):
+    user, token = await _user_with_token(db)
+    monkeypatch.setattr(
+        "api.services.mailboxes.get_token", lambda email, provider: {"token": "t"}
+    )
+
+    body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+
+    assert body["mailboxes"]["connected"] == 1
+    assert body["mailboxes"]["can_add_another"] is False
+
+
+async def test_me_reflects_a_paid_tier(client, db, monkeypatch):
+    user, token = await _user_with_token(db)
+    user.tier = "family"
+    await db.commit()
+    monkeypatch.setattr(
+        "api.services.mailboxes.get_token", lambda email, provider: {"token": "t"}
+    )
+
+    body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+
+    assert body["tier"] == "family"
+    assert body["ads_enabled"] is False
+    assert body["member_limit"] == 2
+    assert body["mailboxes"]["limit"] == 2
+    assert body["mailboxes"]["can_add_another"] is True  # 1 of 2 used
+
+
+async def test_me_degrades_an_unknown_tier_to_free(client, db, monkeypatch):
+    """A stale row or billing bug must not hand out a paid allowance, and must
+    report what the user ACTUALLY got rather than echoing the bad value."""
+    user, token = await _user_with_token(db)
+    user.tier = "enterprise-lol"
+    await db.commit()
+    monkeypatch.setattr(
+        "api.services.mailboxes.get_token", lambda email, provider: None
+    )
+
+    body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+
+    assert body["tier"] == "free"
+    assert body["mailboxes"]["limit"] == 1
+    assert body["ads_enabled"] is True
+
+
+async def test_a_revoked_credential_frees_the_mailbox_slot(client, db, monkeypatch):
+    """The count is computed from the credential store, not stored. A revoked
+    app password must not leave the user wedged at their own cap."""
+    user, token = await _user_with_token(db)
+    monkeypatch.setattr(
+        "api.services.mailboxes.get_token", lambda email, provider: None
+    )
+
+    body = (await client.get("/api/v1/account/me", headers=_auth(token))).json()
+
+    assert body["mailboxes"]["connected"] == 0
+    assert body["mailboxes"]["can_add_another"] is True
+
+
+async def test_me_requires_authentication(client):
+    assert (await client.get("/api/v1/account/me")).status_code == 401

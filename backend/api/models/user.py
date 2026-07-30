@@ -17,6 +17,15 @@ class User(TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(
         nullable=False, default="google", server_default="google"
     )
+    # Billing tier: 'free' | 'pro' | 'family' (D44). Drives the mailbox cap and
+    # whether ads show. No DB CHECK — the valid set grows with pricing and is
+    # validated in Python, where an unrecognised value degrades to free rather
+    # than erroring (D34/D38 precedent). Limits live in services/entitlements.py,
+    # never inline. There is no billing integration yet, so this is set
+    # deliberately (admin/manual) and everyone defaults to free.
+    tier: Mapped[str] = mapped_column(
+        nullable=False, default="free", server_default="free"
+    )
     # Last date (in REMINDER_TZ) a reminder digest was sent — daily dedup.
     last_reminder_date: Mapped[datetime.date | None] = mapped_column(nullable=True)
     # Last authenticated request from this user. Auto-sync skips accounts
