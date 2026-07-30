@@ -350,6 +350,25 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-30 — Multi-mailbox shipped (D45): the tier caps are now real.** Adds
+> `mail_connections`, the table deferred at D38. Sync runs over every connected mailbox with the
+> per-run message cap **shared across them** — per mailbox it would multiply per-tick Claude spend by
+> the mailbox count (the D39 runaway shape again). A dead mailbox no longer stops the others; the run
+> only reports "please sign in" when every mailbox is broken. New: `POST /account/mailboxes`
+> (authenticated, cap checked before any IMAP round trip) and `DELETE /account/mailboxes/{id}`
+> (destroys the credential, then the row, user-scoped).
+> **The migration backfill is load-bearing** — sync reads mailboxes from the table, so without it
+> every existing user silently stops syncing. Verified on real Postgres 16: backfill excludes deleted
+> users, duplicate live mailbox rejected, reconnect-after-disconnect works, downgrade clean.
+> **Two security holes found and closed while wiring it:** account deletion purged only the identity
+> email's credentials, so other mailboxes' app passwords would have survived deletion; and dropping
+> purge-on-switch could have resurrected the D38 stale-app-password hole (now purged per MAILBOX,
+> unconditionally, so a credential with no row behind it is still caught).
+> Backend **334 tests**. Commit `07144c8`.
+> **Still open:** a second GOOGLE mailbox needs an authenticated OAuth attach flow (only IMAP add is
+> built); `users.provider` is now redundant and should be retired; Flutter UI for managing mailboxes;
+> then the household entity for Family, and billing (nothing sets `tier` yet).
+
 > **Update 2026-07-29 — PR #19 merged; tiers + mailbox caps started (D44).** #19 (sync-window fix,
 > dormant skip, pre-consent disclosure, Android OAuth fix) is on `main` — Railway deploys it and
 > applies migrations `a8f1c2d43e70` + (next) `b2e7c419d5aa`.
