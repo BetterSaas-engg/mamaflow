@@ -364,7 +364,21 @@
 > email's credentials, so other mailboxes' app passwords would have survived deletion; and dropping
 > purge-on-switch could have resurrected the D38 stale-app-password hole (now purged per MAILBOX,
 > unconditionally, so a credential with no row behind it is still caught).
-> Backend **334 tests**. Commit `07144c8`.
+> **Security audit found FOUR BLOCKs, all now fixed** (`1230602`): (1) the shared IMAP helper called
+> ITSELF — infinite recursion, so `POST /account/mailboxes` 500'd on every real call, and the suite
+> stayed green because every test of that endpoint mocked the very function that was broken (textbook
+> vacuous coverage; the replacement tests are proven non-vacuous); (2) `ensure_connection` purged
+> credentials BEFORE the cap check, so a request that ended in 402 had already destroyed a live
+> credential — possibly another account's; (3) two accounts could connect the same address, and since
+> credentials are keyed globally by (email, provider) the second silently overwrote the first's secret
+> and either disconnecting broke both — now refused with 409 and a partial unique index on `email`
+> alone; (4) `delete_account`'s token calls were unguarded and ran after the soft-delete commit, so
+> one Secret Manager blip abandoned the loop and left secrets alive with their rows already deleted,
+> i.e. invisible forever — credentials are now purged BEFORE the rows are marked, per-mailbox
+> isolated, and a failed purge leaves its row live so it stays discoverable. Also closed the cap
+> TOCTOU with a row lock. Backend **342 tests**. Commits `07144c8`, `1230602`.
+> **Known and deliberately unfixed:** `_normalize` is strip+lower only, so gmail dot/plus aliases can
+> occupy two cap slots — self-inflicted, and spend stays bounded by the shared per-run/daily caps.
 > **Still open:** a second GOOGLE mailbox needs an authenticated OAuth attach flow (only IMAP add is
 > built); `users.provider` is now redundant and should be retired; Flutter UI for managing mailboxes;
 > then the household entity for Family, and billing (nothing sets `tier` yet).
