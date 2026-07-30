@@ -379,6 +379,16 @@
 > TOCTOU with a row lock. Backend **342 tests**. Commits `07144c8`, `1230602`.
 > **Known and deliberately unfixed:** `_normalize` is strip+lower only, so gmail dot/plus aliases can
 > occupy two cap slots — self-inflicted, and spend stays bounded by the shared per-run/daily caps.
+> **Then completed the feature:** `POST /account/mailboxes/google` attaches a SECOND Gmail to an
+> authenticated session (address taken from Google's verified id_token, never the caller), applying
+> the audit's ordering lesson — the connection is recorded BEFORE the credential is stored, so a
+> rejected connect can't overwrite anyone's secret. And Settings → **Email accounts** in the app lists
+> / adds / disconnects mailboxes and shows "N of M connected". Every limit is read from
+> `GET /account/me`, never derived client-side, so the number shown and the number enforced can't
+> disagree; at the cap the UI says what the plan includes and offers disconnect, since there is no
+> purchase flow yet. Backend **348 tests**, frontend **122**. Commits `d7feb1a`, `a979113`.
+> **Next:** the household entity for Family (invites, shared item ownership, re-scoping items from
+> user to household, billing owner) — the big one — then billing, since nothing sets `tier` yet.
 > **Still open:** a second GOOGLE mailbox needs an authenticated OAuth attach flow (only IMAP add is
 > built); `users.provider` is now redundant and should be retired; Flutter UI for managing mailboxes;
 > then the household entity for Family, and billing (nothing sets `tier` yet).
