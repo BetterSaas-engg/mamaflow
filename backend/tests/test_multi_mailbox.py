@@ -30,6 +30,16 @@ from api.services.reader_errors import ReauthRequired
 from api.services.users import get_or_create_user
 
 
+@pytest.fixture(autouse=True)
+def _clean_credential_store():
+    """The in-memory credential store is a module-level singleton, so a token
+    written by one test is visible to the next. Several tests here assert a
+    credential is ABSENT, which silently passes/fails on leftovers."""
+    token_store._store = None
+    yield
+    token_store._store = None
+
+
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
@@ -533,3 +543,116 @@ async def test_a_credential_store_failure_does_not_abandon_the_other_mailboxes(
         _select(MailConnection.email).where(MailConnection.deleted_at.is_(None))
     )
     assert [r[0] for r in rows] == ["broken@yahoo.com"]
+
+
+# --- Google add-mailbox (D45 follow-up) ---
+
+
+@pytest.fixture
+def fake_google_exchange(monkeypatch):
+    """Stand in for Google's PKCE exchange. The email it returns models the
+    VERIFIED id_token — the caller never supplies it."""
+    state = {"email": "second@gmail.com", "raise": None}
+
+    async def exchange(code, code_verifier):
+        if state["raise"] is not None:
+            raise state["raise"]
+        return {"token": "ya29-new", "refresh_token": "r"}, state["email"]
+
+    monkeypatch.setattr("api.routers.account.exchange_code_pkce", exchange)
+    return state
+
+
+async def test_pro_user_can_add_a_second_gmail(client, db, fake_google_exchange):
+    user, token = await _user(db, tier="pro")
+    await ensure_connection(db, user, "google", "parent@example.com")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes/google",
+        headers=_auth(token),
+        json={"code": "authcode", "code_verifier": "verifier"},
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["email"] == "second@gmail.com"
+    assert token_store.get_token("second@gmail.com", "google") is not None
+
+
+async def test_the_added_gmail_address_comes_from_google_not_the_caller(
+    client, db, fake_google_exchange
+):
+    """The caller supplies only a code; claiming an address must be impossible."""
+    fake_google_exchange["email"] = "actually-mine@gmail.com"
+    user, token = await _user(db, tier="pro")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes/google",
+        headers=_auth(token),
+        # A hostile client trying to name someone else's mailbox.
+        json={
+            "code": "authcode",
+            "code_verifier": "verifier",
+            "email": "victim@gmail.com",
+        },
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["email"] == "actually-mine@gmail.com"
+
+
+async def test_over_cap_gmail_is_refused_without_storing_a_credential(
+    client, db, fake_google_exchange
+):
+    """The audit's ordering lesson: a connect we reject must not have already
+    written a credential."""
+    user, token = await _user(db, tier="free")
+    await ensure_connection(db, user, "google", "parent@example.com")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes/google",
+        headers=_auth(token),
+        json={"code": "authcode", "code_verifier": "verifier"},
+    )
+
+    assert resp.status_code == 402
+    assert token_store.get_token("second@gmail.com", "google") is None
+
+
+async def test_gmail_already_connected_elsewhere_is_a_conflict(
+    client, db, fake_google_exchange
+):
+    owner, _ = await _user(db, email="owner@example.com", tier="pro")
+    await ensure_connection(db, owner, "google", "second@gmail.com")
+    token_store.store_token("second@gmail.com", {"token": "theirs"}, "google")
+    user, token = await _user(db, email="other@example.com", tier="pro")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes/google",
+        headers=_auth(token),
+        json={"code": "authcode", "code_verifier": "verifier"},
+    )
+
+    assert resp.status_code == 409
+    # The owner's credential is untouched — not overwritten by the attempt.
+    assert token_store.get_token("second@gmail.com", "google") == {"token": "theirs"}
+
+
+async def test_a_bad_google_code_is_a_400(client, db, fake_google_exchange):
+    fake_google_exchange["raise"] = RuntimeError("invalid_grant")
+    user, token = await _user(db, tier="pro")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes/google",
+        headers=_auth(token),
+        json={"code": "bad", "code_verifier": "verifier"},
+    )
+
+    assert resp.status_code == 400
+
+
+async def test_add_google_mailbox_requires_authentication(client):
+    resp = await client.post(
+        "/api/v1/account/mailboxes/google",
+        json={"code": "c", "code_verifier": "v"},
+    )
+    assert resp.status_code == 401

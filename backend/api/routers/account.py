@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -6,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import get_current_user
 from api.auth.imap_auth import ImapAuthRequest, verify_and_store_imap_mailbox
+from api.auth.oauth import exchange_code_pkce
+from api.auth.token_store import store_token
 from api.db.session import get_db
 from api.models.user import User
 from api.services.account import delete_account
@@ -20,6 +24,8 @@ from api.services.mail_connections import (
     mailbox_usage,
     remove_connection,
 )
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/account", tags=["account"])
 
@@ -147,6 +153,74 @@ async def add_mailbox(
                 f"{'es' if exc.limit != 1 else ''}."
             ),
         )
+    return Mailbox(
+        id=str(connection.id),
+        provider=connection.provider,
+        email=connection.email,
+    )
+
+
+class GoogleMailboxRequest(BaseModel):
+    code: str
+    code_verifier: str
+
+
+@router.post(
+    "/mailboxes/google", response_model=Mailbox, status_code=status.HTTP_201_CREATED
+)
+async def add_google_mailbox(
+    payload: GoogleMailboxRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Mailbox:
+    """Attach a second Gmail account to the signed-in user (D44/D45).
+
+    Sign-in ties identity to the mailbox; this does not — the address comes
+    from Google's **verified id_token**, never from the caller, so a user
+    cannot claim a mailbox they don't control.
+
+    Order matters: the connection is recorded BEFORE the credential is stored.
+    Storing first meant a connect we then rejected had already overwritten the
+    credential — including another account's, since the store is keyed by
+    (email, provider) with no user in the key (the 2026-07-30 audit BLOCK).
+    The reverse failure is benign: a row with no credential just reports
+    "reauth needed" and the user retries.
+    """
+    try:
+        creds_data, google_email = await exchange_code_pkce(
+            payload.code, payload.code_verifier
+        )
+    except Exception as exc:
+        # Types-only: Google's error code is safe, the raw body is not.
+        _log.warning("add-mailbox exchange failed (%s)", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid authorization code",
+        )
+
+    email = normalize_email(google_email)
+    try:
+        connection = await ensure_connection(db, user, "google", email)
+    except MailboxAlreadyConnected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "That mailbox is already connected to another Mamaflow "
+                "account. Disconnect it there first."
+            ),
+        )
+    except MailboxLimitReached as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=(
+                f"Your plan includes {exc.limit} mailbox"
+                f"{'es' if exc.limit != 1 else ''}. "
+                "Upgrade or disconnect one to add another."
+            ),
+        )
+
+    # Blocking gRPC on the secret-manager backend — off the loop (D4).
+    await asyncio.to_thread(store_token, email, creds_data, "google")
     return Mailbox(
         id=str(connection.id),
         provider=connection.provider,
