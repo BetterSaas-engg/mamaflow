@@ -350,6 +350,25 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-29 — PR #19 merged; tiers + mailbox caps started (D44).** #19 (sync-window fix,
+> dormant skip, pre-consent disclosure, Android OAuth fix) is on `main` — Railway deploys it and
+> applies migrations `a8f1c2d43e70` + (next) `b2e7c419d5aa`.
+> **New PM requirement:** cap connected mailboxes by plan — free 1, pro 2, family 2 per parent.
+> Modelled as a **per-user** cap in all three tiers (1/2/2), with Family's extra allowance being a
+> second *member*; Family means two logins sharing a household, not 4 mailboxes on one account.
+> Shipped: `users.tier`, `services/entitlements.py` as the single source of truth (unknown tier
+> degrades to free), and `GET /api/v1/account/me` returning the resolved tier + limits + usage, with
+> the mailbox count **computed from the credential store** so a revoked app password frees the slot.
+> Backend **319 tests**; migration verified on real Postgres 16 incl. downgrade. Commit `923160a`.
+> **Read this before assuming the cap is live:** the hard server-side block is deliberately NOT wired.
+> Phase 1 keeps one credential per user and connecting a provider *purges* the old one (D38), so every
+> connect today is a switch, not an addition — a naive check would break provider switching while
+> blocking nothing. Free=1 is enforced by construction; Pro/Family only become reachable with
+> `mail_connections`, where only `connected_mailbox_count` changes.
+> **Next, in order:** (1) `mail_connections` multi-mailbox — the capability the cap is a policy over;
+> (2) the household entity for Family (invites, shared item ownership, re-scoping items from user to
+> household, billing owner) — a big one; (3) billing, since nothing sets `tier` yet (admin/manual).
+
 > **Update 2026-07-28 — Android OAuth redirect FIXED (D43) + E0 pre-consent disclosure built.**
 > The long-standing "Chrome finishes Google sign-in but never returns to the app" bug is solved, with
 > the root cause **confirmed on the PM's own S25 Ultra** rather than inferred. flutter_web_auth_2's
