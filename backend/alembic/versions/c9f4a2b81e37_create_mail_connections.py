@@ -14,6 +14,9 @@ that already exist — no credential migration needed.
 
 The unique index is PARTIAL (deleted_at IS NULL) so disconnecting and
 reconnecting the same address works instead of colliding with the tombstone.
+It is keyed on `email` ALONE, not (user_id, email): the credential store has no
+user in its key, so two accounts connecting one address would share a single
+secret and clobber each other.
 
 Hand-written — autogenerate proposes dropping ix_sender_allowlist_domain /
 ix_sender_blocklist_domain, a known false diff documented in ea23631396aa.
@@ -62,10 +65,13 @@ def upgrade() -> None:
     op.create_index(
         "ix_mail_connections_user_id", "mail_connections", ["user_id"]
     )
+    # One LIVE connection per address, across all users — see the model for
+    # why this is global rather than per-user (the credential store has no user
+    # in its key). Partial, so reconnecting a disconnected mailbox works.
     op.create_index(
-        "uq_mail_connections_user_email_live",
+        "uq_mail_connections_email_live",
         "mail_connections",
-        ["user_id", "email"],
+        ["email"],
         unique=True,
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
@@ -79,8 +85,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "uq_mail_connections_user_email_live", table_name="mail_connections"
-    )
+    op.drop_index("uq_mail_connections_email_live", table_name="mail_connections")
     op.drop_index("ix_mail_connections_user_id", table_name="mail_connections")
     op.drop_table("mail_connections")

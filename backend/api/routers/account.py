@@ -12,6 +12,7 @@ from api.services.account import delete_account
 from api.services.entitlements import entitlements_for
 from api.services.users import normalize_email
 from api.services.mail_connections import (
+    MailboxAlreadyConnected,
     MailboxLimitReached,
     ensure_connection,
     get_connection,
@@ -130,6 +131,14 @@ async def add_mailbox(
     provider, verified_email = await verify_and_store_imap_mailbox(payload, request)
     try:
         connection = await ensure_connection(db, user, provider.key, verified_email)
+    except MailboxAlreadyConnected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "That mailbox is already connected to another Mamaflow "
+                "account. Disconnect it there first."
+            ),
+        )
     except MailboxLimitReached as exc:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,

@@ -9,6 +9,8 @@ down, and no credential outlives its connection.
 Mail/Claude are mocked — never live (testing skill).
 """
 
+import imaplib
+
 import pytest
 
 from api.auth import token_store
@@ -18,6 +20,7 @@ from api.schemas.family_event import ExtractionResponse
 from api.services import sync_runner
 from api.services.ai_extractor import ExtractionUsage
 from api.services.mail_connections import (
+    MailboxAlreadyConnected,
     MailboxLimitReached,
     ensure_connection,
     list_connections,
@@ -321,3 +324,212 @@ async def test_connecting_an_address_under_a_new_provider_destroys_the_old_crede
     await ensure_connection(db, user, "yahoo", "parent@example.com")
 
     assert token_store.get_token("parent@example.com", "google") is None
+
+
+# --- The real add-mailbox endpoint (audit: no test ever called it) ---
+#
+# Every previous test mocked `verify_and_store_imap_mailbox` — the very
+# function that was broken — so the suite stayed green while the endpoint
+# 500'd on every real call. These drive the actual router with only the IMAP
+# socket faked.
+
+
+class _FakeIMAP:
+    fail_login = False
+
+    def __init__(self, host, port, timeout=None):
+        pass
+
+    def login(self, user, password):
+        if _FakeIMAP.fail_login:
+            raise imaplib.IMAP4.error(b"[AUTHENTICATIONFAILED]")
+        return "OK", [b""]
+
+    def select(self, mailbox, readonly=False):
+        return "OK", [b"1"]
+
+    def logout(self):
+        return "BYE", [b""]
+
+
+@pytest.fixture
+def fake_imap(monkeypatch):
+    from api.auth import imap_auth
+    from api.services import auth_throttle
+
+    _FakeIMAP.fail_login = False
+    monkeypatch.setattr(imap_auth.imaplib, "IMAP4_SSL", _FakeIMAP)
+    auth_throttle._reset()
+    yield
+    auth_throttle._reset()
+
+
+async def test_pro_user_can_actually_add_a_second_mailbox(client, db, fake_imap):
+    """The happy path, end to end through the real endpoint. Its absence is
+    what let an infinite self-recursion ship green."""
+    user, token = await _user(db, tier="pro")
+    await ensure_connection(db, user, "google", "parent@example.com")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes",
+        headers=_auth(token),
+        json={
+            "provider": "yahoo",
+            "email": "second@yahoo.com",
+            "app_password": "abcd efgh ijkl mnop",
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["email"] == "second@yahoo.com"
+    assert {c.email for c in await list_connections(db, user.id)} == {
+        "parent@example.com",
+        "second@yahoo.com",
+    }
+    # And the credential really was stored for the new mailbox.
+    assert token_store.get_token("second@yahoo.com", "yahoo") is not None
+
+
+async def test_add_mailbox_rejects_a_bad_app_password(client, db, fake_imap):
+    _FakeIMAP.fail_login = True
+    user, token = await _user(db, tier="pro")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes",
+        headers=_auth(token),
+        json={
+            "provider": "yahoo",
+            "email": "second@yahoo.com",
+            "app_password": "wrong wrong wrong",
+        },
+    )
+
+    assert resp.status_code == 401
+    assert await list_connections(db, user.id) == []
+
+
+async def test_sign_in_still_works_through_the_shared_helper(client, db, fake_imap):
+    """The helper is shared with sign-in; refactoring it must not break that."""
+    resp = await client.post(
+        "/api/v1/auth/imap",
+        json={
+            "provider": "yahoo",
+            "email": "new@yahoo.com",
+            "app_password": "abcd efgh ijkl mnop",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["user"]["email"] == "new@yahoo.com"
+
+
+# --- Audit follow-ups (2026-07-30 security review) ---
+
+
+async def test_a_rejected_over_cap_attempt_destroys_no_credential(db):
+    """The purge used to run BEFORE the cap check, so an attempt that ended in
+    402 had already wiped a live credential for that address — including one
+    belonging to a different account."""
+    owner, _ = await _user(db, email="owner@example.com", tier="free")
+    await ensure_connection(db, owner, "yahoo", "shared@family.com")
+    token_store.store_token(
+        "shared@family.com", {"kind": "imap_app_password"}, "yahoo"
+    )
+
+    other, _ = await _user(db, email="other@example.com", tier="free")
+    await ensure_connection(db, other, "google", "other@example.com")
+
+    with pytest.raises(Exception):
+        await ensure_connection(db, other, "icloud", "shared@family.com")
+
+    assert token_store.get_token("shared@family.com", "yahoo") is not None
+
+
+async def test_a_mailbox_cannot_be_connected_by_two_accounts(db):
+    """Credentials are keyed globally by (email, provider) with no user in the
+    key, so a second connection would clobber the first's secret and either
+    party disconnecting would break the other."""
+    first, _ = await _user(db, email="mum@example.com", tier="free")
+    await ensure_connection(db, first, "yahoo", "shared@family.com")
+
+    second, _ = await _user(db, email="dad@example.com", tier="free")
+
+    with pytest.raises(MailboxAlreadyConnected):
+        await ensure_connection(db, second, "yahoo", "shared@family.com")
+
+
+async def test_add_mailbox_endpoint_reports_a_taken_mailbox_as_conflict(
+    client, db, fake_imap
+):
+    owner, _ = await _user(db, email="owner@example.com", tier="pro")
+    await ensure_connection(db, owner, "yahoo", "shared@family.com")
+    user, token = await _user(db, email="other@example.com", tier="pro")
+
+    resp = await client.post(
+        "/api/v1/account/mailboxes",
+        headers=_auth(token),
+        json={
+            "provider": "yahoo",
+            "email": "shared@family.com",
+            "app_password": "abcd efgh ijkl mnop",
+        },
+    )
+
+    assert resp.status_code == 409
+
+
+async def test_account_deletion_purges_every_mailbox_not_just_the_identity(
+    db, monkeypatch
+):
+    user, _ = await _user(db, tier="pro")
+    await ensure_connection(db, user, "google", "parent@example.com")
+    await ensure_connection(db, user, "yahoo", "second@yahoo.com")
+    token_store.store_token("parent@example.com", {"token": "t"}, "google")
+    token_store.store_token("second@yahoo.com", {"kind": "imap"}, "yahoo")
+    monkeypatch.setattr(
+        "api.services.account.revoke_gmail_token", lambda creds: None
+    )
+
+    from api.services.account import delete_account
+
+    await delete_account(db, user)
+
+    assert token_store.get_token("parent@example.com", "google") is None
+    assert token_store.get_token("second@yahoo.com", "yahoo") is None
+
+
+async def test_a_credential_store_failure_does_not_abandon_the_other_mailboxes(
+    db, monkeypatch
+):
+    """One transient Secret Manager fault used to abort the loop, leaving the
+    remaining secrets alive while their rows were already soft-deleted — i.e.
+    invisible forever."""
+    user, _ = await _user(db, tier="pro")
+    await ensure_connection(db, user, "yahoo", "broken@yahoo.com")
+    await ensure_connection(db, user, "icloud", "fine@icloud.com")
+    token_store.store_token("fine@icloud.com", {"kind": "imap"}, "icloud")
+
+    real_delete = token_store.delete_all_tokens
+
+    def flaky(email):
+        if email == "broken@yahoo.com":
+            raise RuntimeError("secret manager unavailable")
+        return real_delete(email)
+
+    monkeypatch.setattr("api.services.account.token_store.delete_all_tokens", flaky)
+    from api.services.account import delete_account
+
+    await delete_account(db, user)
+
+    # The healthy mailbox was still purged...
+    assert token_store.get_token("fine@icloud.com", "icloud") is None
+    # ...and the failed one stays live so it remains discoverable for cleanup,
+    # rather than being soft-deleted with its credential still out there.
+    from sqlalchemy import select as _select
+
+    from api.models.mail_connection import MailConnection
+
+    rows = await db.execute(
+        _select(MailConnection.email).where(MailConnection.deleted_at.is_(None))
+    )
+    assert [r[0] for r in rows] == ["broken@yahoo.com"]

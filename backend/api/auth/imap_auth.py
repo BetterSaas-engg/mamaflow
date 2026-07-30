@@ -109,17 +109,6 @@ async def verify_and_store_imap_mailbox(payload: "ImapAuthRequest", request: Req
     the two paths cannot drift on validation, throttling or error wording — the
     credential surface is the same one either way.
     """
-    provider, email = await verify_and_store_imap_mailbox(payload, request)
-
-    return provider, email
-
-
-@router.post("/imap", response_model=MobileAuthResponse)
-async def imap_auth(
-    payload: ImapAuthRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
     client_ip = request.client.host if request.client else "unknown"
     email = normalize_email(payload.email)
 
@@ -170,18 +159,29 @@ async def imap_auth(
 
     auth_throttle.record_success(email)
 
-    user = await get_or_create_user(db, email, provider=provider.key)
-
     credential = {
         "kind": "imap_app_password",
         "provider": provider.key,
-        "username": user.email,
+        "username": email,
         "app_password": app_password,
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     # Blocking gRPC on the secret-manager backend — off the loop (D4 path,
     # same as Google tokens).
-    await asyncio.to_thread(store_token, user.email, credential, provider.key)
+    await asyncio.to_thread(store_token, email, credential, provider.key)
+    return provider, email
+
+
+@router.post("/imap", response_model=MobileAuthResponse)
+async def imap_auth(
+    payload: ImapAuthRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    provider, email = await verify_and_store_imap_mailbox(payload, request)
+
+    user = await get_or_create_user(db, email, provider=provider.key)
+
     # Record the mailbox (D44). This no longer purges other providers: a user
     # may hold several mailboxes now, and sign-in only ever (re)connects THIS
     # one. Re-authenticating an existing mailbox is never blocked by the cap;

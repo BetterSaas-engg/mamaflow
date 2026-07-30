@@ -25,6 +25,14 @@ from api.models.user import User
 from api.services.entitlements import can_connect_another_mailbox, mailbox_limit
 
 
+class MailboxAlreadyConnected(Exception):
+    """This mailbox is already connected to a different account."""
+
+    def __init__(self, email: str) -> None:
+        super().__init__("mailbox already connected to another account")
+        self.email = email
+
+
 class MailboxLimitReached(Exception):
     """The user's tier does not allow another mailbox."""
 
@@ -36,6 +44,22 @@ class MailboxLimitReached(Exception):
 
 def _normalize(email: str) -> str:
     return email.strip().lower()
+
+
+async def _purge_superseded_credentials(email: str, provider: str) -> None:
+    """Destroy any credential this address still holds under a DIFFERENT
+    provider.
+
+    D38's guarantee, re-scoped for multi-mailbox: no address may keep a live
+    credential under a provider it is no longer connected through. Before the
+    table this was "purge every other provider for the user's identity email";
+    the right scope now is the MAILBOX, which leaves the user's other mailboxes
+    alone.
+
+    Only ever called once the connection is actually established — a request we
+    are going to reject must not destroy anything.
+    """
+    await asyncio.to_thread(delete_other_tokens, email, provider)
 
 
 async def list_connections(db: AsyncSession, user_id) -> list[MailConnection]:
@@ -83,14 +107,6 @@ async def ensure_connection(
     the partial unique index.
     """
     normalized = _normalize(email)
-    # D38's guarantee, re-scoped for multi-mailbox: no address may keep a live
-    # credential under a provider it is no longer connected through. Before the
-    # table this was "purge every OTHER provider for the user's identity
-    # email"; the right scope now is the MAILBOX being connected, which leaves
-    # the user's other mailboxes alone. Unconditional, so it also covers a
-    # credential that exists with no row behind it (a pre-table leftover) —
-    # relying on the row to spot the switch would miss exactly that case.
-    await asyncio.to_thread(delete_other_tokens, normalized, provider)
     existing = await db.execute(
         select(MailConnection).where(
             MailConnection.user_id == user.id,
@@ -102,9 +118,39 @@ async def ensure_connection(
         if row.provider != provider:
             row.provider = provider
             await db.commit()
+            await _purge_superseded_credentials(normalized, provider)
         return row
 
+    # One live connection per address, across ALL users. The credential store
+    # is keyed globally by (email, provider) with no user in the key, so two
+    # accounts connecting the same address share one secret: the second connect
+    # silently overwrote the first's credential, and either party disconnecting
+    # destroyed it for both — leaving the other with a mailbox that still shows
+    # as connected, still occupies a cap slot, and can no longer sync. Refuse
+    # instead. (Genuinely shared family mailboxes are the household feature's
+    # job, not two independent connections fighting over one secret.)
+    taken = await db.execute(
+        select(MailConnection.id).where(
+            MailConnection.email == normalized,
+            MailConnection.user_id != user.id,
+            MailConnection.deleted_at.is_(None),
+        )
+    )
+    if taken.first() is not None:
+        raise MailboxAlreadyConnected(normalized)
+
     # A genuinely new mailbox — this is the only path the cap applies to.
+    # Deliberately BEFORE any credential purge: a rejected request must leave
+    # the world untouched. Purging first meant an over-cap attempt on a shared
+    # address destroyed a live credential and then 402'd.
+    #
+    # Lock the user row first: count-then-insert is otherwise a TOCTOU, and two
+    # concurrent adds of DIFFERENT addresses could both read "under the cap"
+    # and both commit. (The unique index only catches the same-address race.)
+    # No-op on SQLite, which serializes writes anyway.
+    await db.execute(
+        select(User.id).where(User.id == user.id).with_for_update()
+    )
     current = await connection_count(db, user.id)
     if not can_connect_another_mailbox(user.tier, current):
         raise MailboxLimitReached(user.tier, mailbox_limit(user.tier))
@@ -113,6 +159,7 @@ async def ensure_connection(
         row.deleted_at = None
         row.provider = provider
         await db.commit()
+        await _purge_superseded_credentials(normalized, provider)
         return row
 
     row = MailConnection(user_id=user.id, provider=provider, email=normalized)
@@ -134,6 +181,7 @@ async def ensure_connection(
         if found is None:
             raise
         return found
+    await _purge_superseded_credentials(normalized, provider)
     return row
 
 

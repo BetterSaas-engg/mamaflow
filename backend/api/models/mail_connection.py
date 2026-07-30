@@ -26,12 +26,17 @@ class MailConnection(TimestampMixin, Base):
 
     __tablename__ = "mail_connections"
     __table_args__ = (
-        # A mailbox can only be connected once per user — but only among LIVE
-        # rows, so disconnecting and reconnecting the same address works
-        # instead of colliding with the tombstone.
+        # An address may have only ONE live connection, across all users —
+        # not merely one per user. The credential store is keyed globally by
+        # (email, provider) with no user in the key, so two accounts connecting
+        # the same address would share a single secret: the second overwrote
+        # the first's, and either disconnecting destroyed it for both. Enforced
+        # in the DB rather than only in app code so concurrent connects can't
+        # race past the check.
+        # Partial (live rows only), so disconnect + reconnect works instead of
+        # colliding with the tombstone.
         Index(
-            "uq_mail_connections_user_email_live",
-            "user_id",
+            "uq_mail_connections_email_live",
             "email",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
