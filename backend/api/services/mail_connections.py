@@ -23,6 +23,7 @@ from api.auth.token_store import delete_other_tokens, delete_token
 from api.models.mail_connection import MailConnection
 from api.models.user import User
 from api.services.entitlements import can_connect_another_mailbox, mailbox_limit
+from api.services.households import plan_owner
 
 
 class MailboxAlreadyConnected(Exception):
@@ -152,8 +153,9 @@ async def ensure_connection(
         select(User.id).where(User.id == user.id).with_for_update()
     )
     current = await connection_count(db, user.id)
-    if not can_connect_another_mailbox(user.tier, current):
-        raise MailboxLimitReached(user.tier, mailbox_limit(user.tier))
+    tier = (await plan_owner(db, user)).tier
+    if not can_connect_another_mailbox(tier, current):
+        raise MailboxLimitReached(tier, mailbox_limit(tier))
 
     if row is not None:  # revive a previously disconnected mailbox
         row.deleted_at = None
@@ -210,5 +212,8 @@ async def mailbox_usage(db: AsyncSession, user: User) -> tuple[int, int, bool]:
     failure happening somewhere they can't observe.
     """
     connected = await connection_count(db, user.id)
-    limit = mailbox_limit(user.tier)
-    return connected, limit, can_connect_another_mailbox(user.tier, connected)
+    # A household member inherits the owner's plan: one household, one bill.
+    # Reading the member's own tier would show a Family member the free cap.
+    tier = (await plan_owner(db, user)).tier
+    limit = mailbox_limit(tier)
+    return connected, limit, can_connect_another_mailbox(tier, connected)

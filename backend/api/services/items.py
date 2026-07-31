@@ -10,6 +10,7 @@ from api.models.item import Item
 from api.models.synced_message import SyncedMessage
 from api.models.user import User
 from api.schemas.family_event import FamilyItem
+from api.services.households import visible_user_ids
 
 
 async def existing_message_ids(
@@ -209,7 +210,14 @@ async def list_items(
     Date filters compare on event_date; ISO 'YYYY-MM-DD' strings sort
     lexicographically, so range comparison is correct.
     """
-    query = select(Item).where(Item.user_id == user.id, Item.deleted_at.is_(None))
+    # Household members share a calendar (D46), so a read spans every member.
+    # Writes and the sync dedup deliberately do NOT — an item belongs to the
+    # user whose mailbox produced it, and widening dedup would make one
+    # member's sync suppress another's mail.
+    visible = await visible_user_ids(db, user)
+    query = select(Item).where(
+        Item.user_id.in_(visible), Item.deleted_at.is_(None)
+    )
 
     if item_type is not None:
         query = query.where(Item.item_type == item_type)

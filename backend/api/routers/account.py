@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import uuid
 
@@ -14,6 +15,20 @@ from api.db.session import get_db
 from api.models.user import User
 from api.services.account import delete_account
 from api.services.entitlements import entitlements_for
+from api.services import auth_throttle
+from api.services.households import (
+    AlreadyInHousehold,
+    InviteInvalid,
+    MemberLimitReached,
+    NotHouseholdOwner,
+    accept_invite,
+    create_invite,
+    leave_household,
+    members,
+    pending_invites,
+    plan_owner,
+    remove_member,
+)
 from api.services.users import normalize_email
 from api.services.mail_connections import (
     MailboxAlreadyConnected,
@@ -69,7 +84,8 @@ async def read_me(
     Counts come from live connection rows, so the number the client shows and
     the number the cap is enforced against are the same one.
     """
-    ent = entitlements_for(user.tier)
+    # Members inherit the household owner's plan.
+    ent = entitlements_for((await plan_owner(db, user)).tier)
     connected, limit, can_add = await mailbox_usage(db, user)
     return AccountMe(
         id=str(user.id),
@@ -255,3 +271,164 @@ async def delete_my_account(
 ) -> None:
     """Soft-delete the authed user's account + data and revoke Gmail access."""
     await delete_account(db, user)
+
+
+# --- Household: two parents, one plan, one shared calendar (D46) ---
+
+
+class HouseholdMember(BaseModel):
+    id: str
+    email: str
+    is_owner: bool
+
+
+class HouseholdView(BaseModel):
+    exists: bool
+    is_owner: bool
+    member_limit: int
+    members: list[HouseholdMember]
+    pending_invites: int
+
+
+class InviteCreated(BaseModel):
+    # Returned ONCE. Only a hash is stored, so this can never be re-read.
+    code: str
+    expires_at: datetime.datetime
+
+
+class AcceptInviteRequest(BaseModel):
+    code: str
+
+
+@router.get("/household", response_model=HouseholdView)
+async def read_household(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> HouseholdView:
+    owner = await plan_owner(db, user)
+    limit = entitlements_for(owner.tier).members
+    if user.household_id is None:
+        return HouseholdView(
+            exists=False,
+            is_owner=False,
+            member_limit=limit,
+            members=[],
+            pending_invites=0,
+        )
+    people = await members(db, user.household_id)
+    return HouseholdView(
+        exists=True,
+        is_owner=owner.id == user.id,
+        member_limit=limit,
+        members=[
+            HouseholdMember(
+                id=str(p.id), email=p.email, is_owner=p.id == owner.id
+            )
+            for p in people
+        ],
+        pending_invites=len(await pending_invites(db, user.household_id)),
+    )
+
+
+@router.post(
+    "/household/invites",
+    response_model=InviteCreated,
+    status_code=status.HTTP_201_CREATED,
+)
+async def invite_to_household(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> InviteCreated:
+    """Mint a join code for the second parent.
+
+    A code rather than an emailed link: there is no outbound email sender yet,
+    and building one purely for this would be a far larger surface than the
+    feature needs. The owner shares it however they already talk.
+    """
+    try:
+        invite, code = await create_invite(db, user)
+    except MemberLimitReached as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=(
+                f"Your plan includes {exc.limit} "
+                f"{'person' if exc.limit == 1 else 'people'}."
+            ),
+        )
+    except NotHouseholdOwner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the plan owner can invite someone.",
+        )
+    return InviteCreated(code=code, expires_at=invite.expires_at)
+
+
+@router.post("/household/invites/accept", response_model=HouseholdView)
+async def accept_household_invite(
+    payload: AcceptInviteRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> HouseholdView:
+    """Join a household using a code.
+
+    Throttled: a short code is guessable given enough attempts, and this is the
+    only place one can be redeemed.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = auth_throttle.check(client_ip, user.email)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again in a few minutes.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    try:
+        await accept_invite(db, user, payload.code)
+    except AlreadyInHousehold:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You're already part of a household. Leave it first.",
+        )
+    except MemberLimitReached as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=f"That household is full ({exc.limit}).",
+        )
+    except InviteInvalid:
+        auth_throttle.record_failure(client_ip, user.email)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That code isn't valid. Ask for a new one.",
+        )
+    auth_throttle.record_success(user.email)
+    return await read_household(user=user, db=db)
+
+
+@router.delete("/household/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_household_member(
+    member_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Owner removes someone; anyone else may remove only themselves (leave).
+
+    Nothing is deleted either way — the two calendars simply stop being shared.
+    """
+    try:
+        if member_id == user.id:
+            await leave_household(db, user)
+            return
+        removed = await remove_member(db, user, member_id)
+    except NotHouseholdOwner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only the plan owner can remove someone, and the owner can't "
+                "leave their own household."
+            ),
+        )
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
+        )

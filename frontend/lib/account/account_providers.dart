@@ -4,6 +4,7 @@ import '../auth/session_controller.dart';
 import '../core/providers.dart';
 import 'account_service.dart';
 import 'jwt_email.dart';
+import 'household.dart';
 import 'mailboxes.dart';
 
 /// The signed-in account's email, read from the stored session JWT. Null if
@@ -33,4 +34,13 @@ final accountPlanProvider = FutureProvider<AccountPlan>((ref) {
 final mailboxListProvider = FutureProvider<List<Mailbox>>((ref) {
   ref.watch(sessionProvider);
   return ref.watch(mailboxServiceProvider).list();
+});
+
+/// Family sharing (D46).
+final householdServiceProvider = Provider<HouseholdService>(
+    (ref) => HouseholdService(ref.watch(apiClientProvider)));
+
+final householdProvider = FutureProvider<HouseholdView>((ref) {
+  ref.watch(sessionProvider);
+  return ref.watch(householdServiceProvider).get();
 });

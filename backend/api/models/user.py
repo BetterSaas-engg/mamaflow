@@ -1,6 +1,7 @@
 import datetime
+import uuid
 
-from sqlalchemy import DateTime, text
+from sqlalchemy import DateTime, ForeignKey, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.models.base import Base, TimestampMixin, _utcnow
@@ -25,6 +26,13 @@ class User(TimestampMixin, Base):
     # deliberately (admin/manual) and everyone defaults to free.
     tier: Mapped[str] = mapped_column(
         nullable=False, default="free", server_default="free"
+    )
+    # The household this user belongs to, if any (D46). NULL = solo account,
+    # which is every user today. Membership is here rather than in a join table
+    # because a user belongs to at most one household — the Family tier is two
+    # parents, not an arbitrary graph.
+    household_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("households.id"), nullable=True, index=True
     )
     # Last date (in REMINDER_TZ) a reminder digest was sent — daily dedup.
     last_reminder_date: Mapped[datetime.date | None] = mapped_column(nullable=True)

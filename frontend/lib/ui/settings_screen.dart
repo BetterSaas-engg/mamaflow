@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../account/account_providers.dart';
+import '../account/household_screen.dart';
 import '../account/mailboxes_screen.dart';
 import '../auth/session_controller.dart';
 
@@ -29,6 +30,16 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const MailboxesScreen()),
+            ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.groups_outlined),
+            title: const Text('Family sharing'),
+            subtitle: const Text('Share one calendar with your partner'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const HouseholdScreen()),
             ),
           ),
           const Divider(height: 1),
