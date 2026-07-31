@@ -139,13 +139,20 @@ async def test_free_and_pro_cannot_invite_anyone(db):
             await create_invite(db, owner)
 
 
-async def test_outstanding_invites_count_against_the_limit(db):
-    """Otherwise an owner could mint several codes and let several people in."""
+async def test_asking_again_replaces_the_code_rather_than_adding_one(db):
+    """At most one live code per household — that is the real protection
+    against minting several. And an owner whose partner never used the first
+    code must not be locked out for the full 14-day TTL."""
     mum, _ = await _user(db, "mum@example.com", tier="family")
-    await create_invite(db, mum)
+    _, first = await create_invite(db, mum)
+    _, second = await create_invite(db, mum)
 
-    with pytest.raises(MemberLimitReached):
-        await create_invite(db, mum)
+    dad, _ = await _user(db, "dad@example.com")
+    with pytest.raises(InviteInvalid):
+        await accept_invite(db, dad, first)  # superseded
+
+    await accept_invite(db, dad, second)
+    assert dad.household_id is not None
 
 
 async def test_a_member_cannot_invite_further_people(db):
@@ -318,3 +325,161 @@ async def test_visible_ids_is_the_single_definition_of_visibility(db):
     await db.refresh(mum)
 
     assert set(await visible_user_ids(db, mum)) == {mum.id, dad.id}
+
+
+# --- Audit follow-ups (2026-07-31 security review) ---
+
+
+async def test_deleting_your_account_severs_the_household(db):
+    """Deletion soft-deletes the row, and a later sign-in REACTIVATES it. If
+    household_id survived that, signing back in silently restored sight of the
+    other person's calendar — no invite, no accept, no notice to them."""
+    from api.services.account import delete_account
+
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, _ = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+    await _item(db, mum, "m1", "Swimming lesson")
+
+    await delete_account(db, dad)
+
+    assert dad.household_id is None
+    # Reactivate exactly as a real sign-in would.
+    dad_again = await get_or_create_user(db, "dad@example.com")
+    assert dad_again.household_id is None
+    assert await list_items(db, dad_again) == []
+
+
+async def test_reactivation_alone_never_restores_a_membership(db):
+    """Belt and braces: even if a row somehow kept its household_id, coming
+    back from deletion must not re-share."""
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, _ = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+    dad.deleted_at = datetime.datetime.now(datetime.UTC)
+    await db.commit()  # household_id deliberately left intact
+
+    revived = await get_or_create_user(db, "dad@example.com")
+
+    assert revived.household_id is None
+
+
+async def test_the_owner_deleting_dissolves_the_household(db):
+    """The survivor would otherwise inherit a deleted owner's plan forever with
+    no way to transfer or leave it."""
+    from api.services.account import delete_account
+    from api.services.mail_connections import mailbox_usage
+
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, _ = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+
+    await delete_account(db, mum)
+    await db.refresh(dad)
+
+    assert dad.household_id is None
+    # And he's back on his own (free) plan, not the deleted owner's Family one.
+    _, limit, _ = await mailbox_usage(db, dad)
+    assert limit == 1
+
+
+async def test_a_deleted_owner_stops_conferring_their_plan(db):
+    """Defence in depth for the same thing, via plan_owner directly."""
+    from api.services.households import plan_owner
+
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, _ = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+    mum.deleted_at = datetime.datetime.now(datetime.UTC)
+    await db.commit()
+
+    assert (await plan_owner(db, dad)).tier == "free"
+
+
+async def test_deleting_an_owner_kills_their_outstanding_invites(db):
+    from api.services.account import delete_account
+    from api.services.households import pending_invites
+
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    household_id = None
+    _, code = await create_invite(db, mum)
+    household_id = mum.household_id
+
+    await delete_account(db, mum)
+
+    assert await pending_invites(db, household_id) == []
+    stranger, _ = await _user(db, "stranger@example.com")
+    with pytest.raises(InviteInvalid):
+        await accept_invite(db, stranger, code)
+
+
+async def test_an_owner_can_revoke_a_code_they_shared_by_mistake(client, db):
+    from sqlalchemy import select
+
+    mum, mum_token = await _user(db, "mum@example.com", tier="family")
+    created = await client.post(
+        "/api/v1/account/household/invites", headers=_auth(mum_token)
+    )
+    code = created.json()["code"]
+    rows = await db.execute(select(HouseholdInvite.id))
+    invite_id = rows.scalars().first()
+
+    resp = await client.delete(
+        f"/api/v1/account/household/invites/{invite_id}", headers=_auth(mum_token)
+    )
+    assert resp.status_code == 204
+
+    dad, _ = await _user(db, "dad@example.com")
+    with pytest.raises(InviteInvalid):
+        await accept_invite(db, dad, code)
+
+
+async def test_a_member_cannot_revoke_invites(client, db):
+    import uuid as _uuid
+
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, dad_token = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+
+    # Ownership is checked before the invite is even looked up, so any id
+    # exercises the rule — and the household is full, so no second invite
+    # could exist to use here anyway.
+    resp = await client.delete(
+        f"/api/v1/account/household/invites/{_uuid.uuid4()}",
+        headers=_auth(dad_token),
+    )
+
+    assert resp.status_code == 403
+
+
+async def test_a_soft_deleted_member_drops_out_of_visibility(db):
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, _ = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+    await _item(db, dad, "d1", "Dentist")
+
+    dad.deleted_at = datetime.datetime.now(datetime.UTC)
+    await db.commit()
+
+    assert await list_items(db, mum) == []
+
+
+async def test_the_reminder_digest_covers_the_shared_calendar(db):
+    """The digest must match what the app shows, or a parent gets a
+    "tomorrow's schedule" push that silently omits half of tomorrow."""
+    import datetime as dt
+
+    from api.services.reminders import tomorrow_events
+
+    mum, _ = await _user(db, "mum@example.com", tier="family")
+    dad, _ = await _user(db, "dad@example.com")
+    await _join(db, mum, dad)
+    tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    await persist_items(
+        db, dad, "d1",
+        [FamilyItem(item_type="event", event_title="Dentist", date=tomorrow)],
+    )
+
+    titles = {i.event_title for i in await tomorrow_events(db, mum, tomorrow)}
+
+    assert "Dentist" in titles

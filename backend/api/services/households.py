@@ -99,7 +99,10 @@ async def plan_owner(db: AsyncSession, user: User) -> User:
     if household is None:
         return user
     owner = await db.get(User, household.owner_user_id)
-    return owner or user
+    # A soft-deleted owner must not keep conferring their plan.
+    if owner is None or owner.deleted_at is not None:
+        return user
+    return owner
 
 
 async def ensure_household(db: AsyncSession, owner: User) -> Household:
@@ -128,18 +131,27 @@ async def create_invite(db: AsyncSession, owner: User) -> tuple[HouseholdInvite,
         # A member cannot invite: the owner holds the plan and the bill.
         raise NotHouseholdOwner
 
+    # Asking for a code again REPLACES the outstanding one rather than adding
+    # to it. Two reasons: it is what "send it again" means to a user, and it
+    # keeps at most one live code per household, which is the actual protection
+    # against an owner minting several and letting several people in.
+    #
+    # It also avoids a trap: counting stale invites against the cap meant an
+    # owner whose partner never used the first code was locked out of issuing
+    # another for the full 14-day TTL.
+    now = await _now()
+    for stale in await _open_invites(db, household.id):
+        stale.revoked_at = now
+
     current = len(await members(db, household.id))
-    open_invites = await _open_invites(db, household.id)
-    # Count outstanding invitations against the cap too, or a Family owner
-    # could mint ten codes and let ten people in.
-    if current + len(open_invites) >= limit:
+    if current + 1 > limit:
         raise MemberLimitReached(limit)
 
     code = _new_code()
     invite = HouseholdInvite(
         household_id=household.id,
         code_hash=_hash_code(code),
-        expires_at=await _now() + datetime.timedelta(days=INVITE_TTL_DAYS),
+        expires_at=now + datetime.timedelta(days=INVITE_TTL_DAYS),
     )
     db.add(invite)
     await db.commit()
@@ -166,14 +178,21 @@ async def accept_invite(db: AsyncSession, user: User, code: str) -> Household:
         raise AlreadyInHousehold
 
     now = await _now()
+    # Lock the invite row for the whole check-then-act. Without it, two
+    # concurrent redemptions of the same code both saw accepted_at IS NULL and
+    # both succeeded — a single-use code consumed twice, and the member cap
+    # blown past (2026-07-31 audit BLOCK). Same precedent as the mailbox cap in
+    # mail_connections. No-op on SQLite, which serializes writes anyway.
     rows = await db.execute(
-        select(HouseholdInvite).where(
+        select(HouseholdInvite)
+        .where(
             HouseholdInvite.code_hash == _hash_code(code),
             HouseholdInvite.accepted_at.is_(None),
             HouseholdInvite.revoked_at.is_(None),
             HouseholdInvite.deleted_at.is_(None),
             HouseholdInvite.expires_at > now,
         )
+        .with_for_update()
     )
     invite = rows.scalars().first()
     if invite is None:
@@ -185,8 +204,15 @@ async def accept_invite(db: AsyncSession, user: User, code: str) -> Household:
     if household is None or household.deleted_at is not None:
         raise InviteInvalid
 
+    # Lock the household too: two DIFFERENT codes redeemed at once would
+    # otherwise both pass the member count below.
+    await db.execute(
+        select(Household.id).where(Household.id == household.id).with_for_update()
+    )
     owner = await db.get(User, household.owner_user_id)
-    limit = member_limit(owner.tier if owner else None)
+    limit = member_limit(
+        owner.tier if owner is not None and owner.deleted_at is None else None
+    )
     if len(await members(db, household.id)) >= limit:
         # The plan may have been downgraded since the code was issued.
         raise MemberLimitReached(limit)
@@ -257,6 +283,7 @@ __all__ = [
     "MemberLimitReached",
     "NotHouseholdOwner",
     "accept_invite",
+    "dissolve_or_leave",
     "create_invite",
     "ensure_household",
     "leave_household",
@@ -267,3 +294,35 @@ __all__ = [
     "revoke_invite",
     "visible_user_ids",
 ]
+
+
+async def dissolve_or_leave(db: AsyncSession, user: User) -> None:
+    """Sever this user's household ties as part of account deletion.
+
+    Without this, deletion left `users.household_id` pointing at the household
+    and `get_or_create_user` reactivates a soft-deleted row on the next
+    sign-in — silently restoring full calendar sharing with no invite, no
+    accept, and no notice to the other member (2026-07-31 audit BLOCK). It also
+    bypassed the member cap entirely, since nothing routed through
+    accept_invite.
+
+    An owner deleting DISSOLVES the household: the remaining member would
+    otherwise keep inheriting a deleted owner's plan with no way to transfer
+    it. Everyone is released to a solo account, which is the state they can
+    actually manage.
+    """
+    if user.household_id is None:
+        return
+    household = await db.get(Household, user.household_id)
+    user.household_id = None
+    if household is None:
+        return
+    if household.owner_user_id != user.id:
+        return
+
+    now = await _now()
+    for member in await members(db, household.id):
+        member.household_id = None
+    for invite in await _open_invites(db, household.id):
+        invite.revoked_at = now
+    household.deleted_at = now

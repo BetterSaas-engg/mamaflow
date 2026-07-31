@@ -18,6 +18,7 @@ from api.models.device import Device
 from api.models.item import Item
 from api.models.mail_connection import MailConnection
 from api.models.user import User
+from api.services.households import dissolve_or_leave
 from api.services.mail_connections import list_connections
 
 _log = logging.getLogger(__name__)
@@ -81,6 +82,11 @@ async def delete_account(db: AsyncSession, user: User) -> None:
                 connection.id,
                 type(exc).__name__,
             )
+
+    # Sever household ties BEFORE the row is marked deleted, or a later
+    # sign-in reactivates the row with its membership intact and restores
+    # sharing without consent.
+    await dissolve_or_leave(db, user)
 
     await db.execute(
         update(Item).where(Item.user_id == user.id, Item.deleted_at.is_(None))

@@ -19,6 +19,7 @@ import sys
 from sqlalchemy import select
 
 from api.db.session import AsyncSessionLocal
+from api.models.mail_connection import MailConnection
 from api.models.user import User
 from api.services.entitlements import TIERS, entitlements_for
 from api.services.users import normalize_email
@@ -36,9 +37,40 @@ async def set_tier(email: str, tier: str) -> None:
             print(f"No active user with email {email}")
             raise SystemExit(1)
         before = user.tier
+        # Downgrading below what the account already uses doesn't shrink
+        # anything — members keep sharing and mailboxes keep syncing at the old
+        # cap until someone manually leaves. Say so rather than let it pass
+        # silently.
+        ent = entitlements_for(tier)
+        members = await db.execute(
+            select(User.email).where(
+                User.household_id == user.household_id,
+                User.household_id.is_not(None),
+                User.deleted_at.is_(None),
+            )
+        )
+        member_count = len(list(members))
+        if member_count > ent.members:
+            print(
+                f"WARNING: {email} is in a household of {member_count}, but "
+                f"{tier} allows {ent.members}. Existing members keep sharing "
+                "until one leaves."
+            )
+        connections = await db.execute(
+            select(MailConnection.id).where(
+                MailConnection.user_id == user.id,
+                MailConnection.deleted_at.is_(None),
+            )
+        )
+        mailbox_count = len(list(connections))
+        if mailbox_count > ent.mailboxes:
+            print(
+                f"WARNING: {email} has {mailbox_count} mailboxes, but {tier} "
+                f"allows {ent.mailboxes}. Existing ones keep syncing until "
+                "one is disconnected."
+            )
         user.tier = tier
         await db.commit()
-        ent = entitlements_for(tier)
         print(
             f"{email}: {before} -> {tier} "
             f"({ent.mailboxes} mailbox(es), {ent.members} member(s), "

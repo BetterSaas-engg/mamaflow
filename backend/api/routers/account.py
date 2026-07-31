@@ -28,6 +28,7 @@ from api.services.households import (
     pending_invites,
     plan_owner,
     remove_member,
+    revoke_invite,
 )
 from api.services.users import normalize_email
 from api.services.mail_connections import (
@@ -431,4 +432,31 @@ async def remove_household_member(
     if not removed:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
+        )
+
+
+@router.delete(
+    "/household/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def revoke_household_invite(
+    invite_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Cancel an outstanding join code.
+
+    A code is a bearer credential: shared with the wrong person, or seen over a
+    shoulder, the owner needs to kill it now rather than wait out the 14-day
+    expiry.
+    """
+    try:
+        revoked = await revoke_invite(db, user, invite_id)
+    except NotHouseholdOwner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the plan owner can cancel an invite.",
+        )
+    if not revoked:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found"
         )
