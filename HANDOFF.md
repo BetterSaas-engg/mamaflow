@@ -363,6 +363,13 @@
 > `e1a7b3c95d24` is purely additive. Backend **369 tests**, frontend **129**. Commit `ef67c0b`.
 > **`python -m api.db.set_tier <email> free|pro|family`** is how you assign a plan — nothing else
 > does, so this is what makes Pro/Family testable.
+> **Audit found two cross-user BLOCKs, both fixed (`59435a6`):** deleting your account left
+> `household_id` intact and sign-in reactivates the row, so signing back in silently restored calendar
+> sharing with no consent (owner deletion now dissolves the household); and `accept_invite` had no
+> locking, so a code could be redeemed twice and a Family household reach three mutually-visible
+> members. Also fixed: the reminder digest now spans the household, `revoke_invite` is wired, and
+> asking for a code again replaces the outstanding one instead of being refused for 14 days.
+> Backend **378 tests**.
 
 > **Update 2026-07-30 — Multi-mailbox shipped (D45): the tier caps are now real.** Adds
 > `mail_connections`, the table deferred at D38. Sync runs over every connected mailbox with the
