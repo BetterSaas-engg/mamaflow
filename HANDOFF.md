@@ -350,6 +350,20 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-31 — Family sharing shipped (D46); the tier feature is complete.** Households give
+> the Family tier its second parent: two logins, one shared calendar. **The sharing boundary is
+> narrow on purpose** — members see each other's extracted *items* and nothing else; each keeps their
+> own login, mail connections and credentials, and no member can read another's raw mail or
+> disconnect their mailboxes. Both halves are pinned by tests. Sharing is opt-in on both sides and
+> the accept dialog says what becomes visible, which matters because D37 widened extraction to *all*
+> appointments (work meetings included). `visible_user_ids()` is the one definition of visibility;
+> reads span the household, writes and sync dedup stay per user. Members inherit the owner's plan.
+> Invites are **hashed, single-use, 14-day codes** rather than emailed links — there is no outbound
+> email sender and building one for this alone would be a much larger surface. Migration
+> `e1a7b3c95d24` is purely additive. Backend **369 tests**, frontend **129**. Commit `ef67c0b`.
+> **`python -m api.db.set_tier <email> free|pro|family`** is how you assign a plan — nothing else
+> does, so this is what makes Pro/Family testable.
+
 > **Update 2026-07-30 — Multi-mailbox shipped (D45): the tier caps are now real.** Adds
 > `mail_connections`, the table deferred at D38. Sync runs over every connected mailbox with the
 > per-run message cap **shared across them** — per mailbox it would multiply per-tick Claude spend by
