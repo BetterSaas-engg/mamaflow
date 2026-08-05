@@ -148,6 +148,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SECRET_KEY must be set to a strong value when ENVIRONMENT != development"
             )
+        # RFC 7518 §3.2 wants >= 256 bits for HMAC-SHA256; PyJWT warns below
+        # that. Deliberately a WARNING, not a hard failure: refusing to boot
+        # would take production down for a key that is merely shorter than
+        # ideal rather than guessable, and rotating the key signs every user
+        # out — that has to be a scheduled act, not a surprise on deploy.
+        if (
+            self.environment != "development"
+            and len(self.secret_key.encode()) < 32
+        ):
+            logging.getLogger(__name__).warning(
+                "SECRET_KEY is %d bytes; RFC 7518 recommends >= 32 for HS256. "
+                "Rotate when convenient — note that rotating signs out every "
+                "user, since the app has no refresh flow (D31).",
+                len(self.secret_key.encode()),
+            )
         return self
 
     @property
