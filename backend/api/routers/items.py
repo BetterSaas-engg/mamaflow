@@ -8,6 +8,7 @@ from api.auth.dependencies import get_current_user
 from api.db.session import get_db
 from api.models.item import Item
 from api.models.user import User
+from api.services.households import visible_user_ids
 from api.schemas.item import ItemListResponse, ItemRead, ItemUpdate, item_to_read
 from api.services.items import list_items
 
@@ -37,7 +38,11 @@ async def update_item(
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(Item, item_id)
-    if item is None or item.user_id != user.id or item.deleted_at is not None:
+    # Household members share the calendar, so either parent can tick an item
+    # off — a shared calendar only one person can act on isn't shared. Same
+    # visibility rule as the list, from the one place that defines it.
+    visible = await visible_user_ids(db, user)
+    if item is None or item.user_id not in visible or item.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Item not found")
 
     item.status = payload.status

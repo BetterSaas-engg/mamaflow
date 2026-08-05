@@ -44,6 +44,12 @@ async def get_or_create_user(
         changed = False
         if user.deleted_at is not None:
             user.deleted_at = None
+            # Re-signing in after deletion is a fresh start. Never resurrect a
+            # household membership: it would restore sight of another person's
+            # calendar with no invite and no accept (2026-07-31 audit).
+            # delete_account already clears this; belt and braces, because the
+            # failure is silent and cross-user.
+            user.household_id = None
             changed = True
         if user.provider != provider:
             user.provider = provider

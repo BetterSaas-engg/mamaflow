@@ -350,6 +350,89 @@
 > mail for extraction. Phase 2 seam ready: Microsoft Graph = one registry entry + `graph_reader` +
 > `/auth/microsoft/*`, no sync changes; Sign in with Apple triggers the `mail_connections` table.
 
+> **Update 2026-07-31 — Family sharing shipped (D46); the tier feature is complete.** Households give
+> the Family tier its second parent: two logins, one shared calendar. **The sharing boundary is
+> narrow on purpose** — members see each other's extracted *items* and nothing else; each keeps their
+> own login, mail connections and credentials, and no member can read another's raw mail or
+> disconnect their mailboxes. Both halves are pinned by tests. Sharing is opt-in on both sides and
+> the accept dialog says what becomes visible, which matters because D37 widened extraction to *all*
+> appointments (work meetings included). `visible_user_ids()` is the one definition of visibility;
+> reads span the household, writes and sync dedup stay per user. Members inherit the owner's plan.
+> Invites are **hashed, single-use, 14-day codes** rather than emailed links — there is no outbound
+> email sender and building one for this alone would be a much larger surface. Migration
+> `e1a7b3c95d24` is purely additive. Backend **369 tests**, frontend **129**. Commit `ef67c0b`.
+> **`python -m api.db.set_tier <email> free|pro|family`** is how you assign a plan — nothing else
+> does, so this is what makes Pro/Family testable.
+> **Audit found two cross-user BLOCKs, both fixed (`59435a6`):** deleting your account left
+> `household_id` intact and sign-in reactivates the row, so signing back in silently restored calendar
+> sharing with no consent (owner deletion now dissolves the household); and `accept_invite` had no
+> locking, so a code could be redeemed twice and a Family household reach three mutually-visible
+> members. Also fixed: the reminder digest now spans the household, `revoke_invite` is wired, and
+> asking for a code again replaces the outstanding one instead of being refused for 14 days.
+> Backend **378 tests**.
+
+> **Update 2026-07-30 — Multi-mailbox shipped (D45): the tier caps are now real.** Adds
+> `mail_connections`, the table deferred at D38. Sync runs over every connected mailbox with the
+> per-run message cap **shared across them** — per mailbox it would multiply per-tick Claude spend by
+> the mailbox count (the D39 runaway shape again). A dead mailbox no longer stops the others; the run
+> only reports "please sign in" when every mailbox is broken. New: `POST /account/mailboxes`
+> (authenticated, cap checked before any IMAP round trip) and `DELETE /account/mailboxes/{id}`
+> (destroys the credential, then the row, user-scoped).
+> **The migration backfill is load-bearing** — sync reads mailboxes from the table, so without it
+> every existing user silently stops syncing. Verified on real Postgres 16: backfill excludes deleted
+> users, duplicate live mailbox rejected, reconnect-after-disconnect works, downgrade clean.
+> **Two security holes found and closed while wiring it:** account deletion purged only the identity
+> email's credentials, so other mailboxes' app passwords would have survived deletion; and dropping
+> purge-on-switch could have resurrected the D38 stale-app-password hole (now purged per MAILBOX,
+> unconditionally, so a credential with no row behind it is still caught).
+> **Security audit found FOUR BLOCKs, all now fixed** (`1230602`): (1) the shared IMAP helper called
+> ITSELF — infinite recursion, so `POST /account/mailboxes` 500'd on every real call, and the suite
+> stayed green because every test of that endpoint mocked the very function that was broken (textbook
+> vacuous coverage; the replacement tests are proven non-vacuous); (2) `ensure_connection` purged
+> credentials BEFORE the cap check, so a request that ended in 402 had already destroyed a live
+> credential — possibly another account's; (3) two accounts could connect the same address, and since
+> credentials are keyed globally by (email, provider) the second silently overwrote the first's secret
+> and either disconnecting broke both — now refused with 409 and a partial unique index on `email`
+> alone; (4) `delete_account`'s token calls were unguarded and ran after the soft-delete commit, so
+> one Secret Manager blip abandoned the loop and left secrets alive with their rows already deleted,
+> i.e. invisible forever — credentials are now purged BEFORE the rows are marked, per-mailbox
+> isolated, and a failed purge leaves its row live so it stays discoverable. Also closed the cap
+> TOCTOU with a row lock. Backend **342 tests**. Commits `07144c8`, `1230602`.
+> **Known and deliberately unfixed:** `_normalize` is strip+lower only, so gmail dot/plus aliases can
+> occupy two cap slots — self-inflicted, and spend stays bounded by the shared per-run/daily caps.
+> **Then completed the feature:** `POST /account/mailboxes/google` attaches a SECOND Gmail to an
+> authenticated session (address taken from Google's verified id_token, never the caller), applying
+> the audit's ordering lesson — the connection is recorded BEFORE the credential is stored, so a
+> rejected connect can't overwrite anyone's secret. And Settings → **Email accounts** in the app lists
+> / adds / disconnects mailboxes and shows "N of M connected". Every limit is read from
+> `GET /account/me`, never derived client-side, so the number shown and the number enforced can't
+> disagree; at the cap the UI says what the plan includes and offers disconnect, since there is no
+> purchase flow yet. Backend **348 tests**, frontend **122**. Commits `d7feb1a`, `a979113`.
+> **Next:** the household entity for Family (invites, shared item ownership, re-scoping items from
+> user to household, billing owner) — the big one — then billing, since nothing sets `tier` yet.
+> **Still open:** a second GOOGLE mailbox needs an authenticated OAuth attach flow (only IMAP add is
+> built); `users.provider` is now redundant and should be retired; Flutter UI for managing mailboxes;
+> then the household entity for Family, and billing (nothing sets `tier` yet).
+
+> **Update 2026-07-29 — PR #19 merged; tiers + mailbox caps started (D44).** #19 (sync-window fix,
+> dormant skip, pre-consent disclosure, Android OAuth fix) is on `main` — Railway deploys it and
+> applies migrations `a8f1c2d43e70` + (next) `b2e7c419d5aa`.
+> **New PM requirement:** cap connected mailboxes by plan — free 1, pro 2, family 2 per parent.
+> Modelled as a **per-user** cap in all three tiers (1/2/2), with Family's extra allowance being a
+> second *member*; Family means two logins sharing a household, not 4 mailboxes on one account.
+> Shipped: `users.tier`, `services/entitlements.py` as the single source of truth (unknown tier
+> degrades to free), and `GET /api/v1/account/me` returning the resolved tier + limits + usage, with
+> the mailbox count **computed from the credential store** so a revoked app password frees the slot.
+> Backend **319 tests**; migration verified on real Postgres 16 incl. downgrade. Commit `923160a`.
+> **Read this before assuming the cap is live:** the hard server-side block is deliberately NOT wired.
+> Phase 1 keeps one credential per user and connecting a provider *purges* the old one (D38), so every
+> connect today is a switch, not an addition — a naive check would break provider switching while
+> blocking nothing. Free=1 is enforced by construction; Pro/Family only become reachable with
+> `mail_connections`, where only `connected_mailbox_count` changes.
+> **Next, in order:** (1) `mail_connections` multi-mailbox — the capability the cap is a policy over;
+> (2) the household entity for Family (invites, shared item ownership, re-scoping items from user to
+> household, billing owner) — a big one; (3) billing, since nothing sets `tier` yet (admin/manual).
+
 > **Update 2026-07-28 — Android OAuth redirect FIXED (D43) + E0 pre-consent disclosure built.**
 > The long-standing "Chrome finishes Google sign-in but never returns to the app" bug is solved, with
 > the root cause **confirmed on the PM's own S25 Ultra** rather than inferred. flutter_web_auth_2's

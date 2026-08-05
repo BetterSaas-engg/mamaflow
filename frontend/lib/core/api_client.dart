@@ -39,6 +39,14 @@ class ApiClient {
     return Map<String, dynamic>.from(r.data as Map);
   }
 
+  /// GET whose response is a JSON array (e.g. the mailbox list).
+  Future<List<Map<String, dynamic>>> getJsonList(String path) async {
+    final r = await _dio.get(path);
+    return (r.data as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> postJson(String path, Map<String, dynamic> body) async {
     final r = await _dio.post(path, data: body);
     return Map<String, dynamic>.from(r.data as Map);

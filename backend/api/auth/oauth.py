@@ -9,9 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.jwt import create_access_token
-from api.auth.token_store import delete_other_tokens, store_token
+from api.auth.token_store import store_token
 from api.config.settings import settings
 from api.db.session import get_db
+from api.services.mail_connections import ensure_connection
 from api.services.users import get_or_create_user
 
 _log = logging.getLogger(__name__)
@@ -118,11 +119,9 @@ async def google_callback(request: Request):
         "client_secret": credentials.client_secret,
         "scopes": list(credentials.scopes),
     })
-    # Same one-active-source invariant as the mobile/web sign-ins: purge any
-    # credential this email holds under another provider (D4 lifecycle). This
-    # legacy dev/verification route isn't in the app's login UX, but it still
-    # writes a Google token, so it must honor the invariant too.
-    await asyncio.to_thread(delete_other_tokens, user_email, "google")
+    # Legacy dev/verification route: not in the app's login UX and it has no
+    # User row to hang a connection off, so it only writes the Google token.
+    # Nothing else reads a mailbox from here.
 
     return WebCallbackResponse(message="OAuth successful", email=user_email)
 
@@ -248,10 +247,9 @@ async def google_mobile_auth(
     # Token store keyed by the user's normalized email so Gmail lookups align.
     # Blocking gRPC on the secret-manager backend — off the loop.
     await asyncio.to_thread(store_token, user.email, creds_data)
-    # Purge any credential left under a non-google provider (a user who
-    # previously connected an IMAP mailbox and is now signing in with
-    # Google) so exactly one mail source is ever active (D4 lifecycle).
-    await asyncio.to_thread(delete_other_tokens, user.email, "google")
+    # Record the mailbox (D44). No longer purges other providers — a user may
+    # hold several mailboxes; sign-in only (re)connects this one.
+    await ensure_connection(db, user, "google", user.email)
 
     token = create_access_token(subject=str(user.id), email=user.email)
 
@@ -381,10 +379,9 @@ async def google_web_auth(
     user = await get_or_create_user(db, email)
     # Blocking gRPC on the secret-manager backend — off the loop.
     await asyncio.to_thread(store_token, user.email, creds_data)
-    # Purge any credential left under a non-google provider (a user who
-    # previously connected an IMAP mailbox and is now signing in with
-    # Google) so exactly one mail source is ever active (D4 lifecycle).
-    await asyncio.to_thread(delete_other_tokens, user.email, "google")
+    # Record the mailbox (D44). No longer purges other providers — a user may
+    # hold several mailboxes; sign-in only (re)connects this one.
+    await ensure_connection(db, user, "google", user.email)
 
     token = create_access_token(
         subject=str(user.id),

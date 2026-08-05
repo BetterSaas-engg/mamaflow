@@ -19,6 +19,8 @@ from api.schemas.family_event import ExtractionResponse, FamilyItem
 from api.services import sync_runner
 from api.services.ai_extractor import ExtractionUsage
 from api.services.users import get_or_create_user
+from api.services.mail_connections import ensure_connection
+from tests.helpers import user_with_mailbox
 
 
 def _extraction(*events):
@@ -48,8 +50,7 @@ def _auth(token):
 
 
 async def _user_with_token(db, email="parent@example.com"):
-    user = await get_or_create_user(db, email)
-    return user, create_access_token(subject=str(user.id), email=user.email)
+    return await user_with_mailbox(db, email)
 
 
 async def test_sync_requires_auth(client):
@@ -294,6 +295,7 @@ async def test_run_sync_job_updates_processed_incrementally(db, session_factory,
     from api.schemas.family_event import FamilyItem, ExtractionResponse
 
     user = await get_or_create_user(db, "inc@example.com")
+    await ensure_connection(db, user, "google", user.email)
     meta = [
         {"message_id": "a", "sender": "s@school.edu", "subject": "x", "date": ""},
         {"message_id": "b", "sender": "s@school.edu", "subject": "y", "date": ""},
@@ -332,6 +334,7 @@ async def test_redact_pii_runs_off_the_event_loop(db, session_factory, monkeypat
     from api.services.users import get_or_create_user
 
     user = await get_or_create_user(db, "offloop@example.com")
+    await ensure_connection(db, user, "google", user.email)
     meta = [{"message_id": "t1", "sender": "s@school.edu", "subject": "x", "date": ""}]
     _wire_reader(monkeypatch, meta)
     monkeypatch.setattr(

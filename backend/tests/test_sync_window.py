@@ -15,6 +15,7 @@ from api.schemas.family_event import ExtractionResponse
 from api.services import sync_runner
 from api.services.ai_extractor import ExtractionUsage
 from api.services.users import get_or_create_user
+from tests.helpers import user_with_mailbox
 
 
 def _auth(token):
@@ -22,8 +23,7 @@ def _auth(token):
 
 
 async def _user_with_token(db, email="parent@example.com"):
-    user = await get_or_create_user(db, email)
-    return user, create_access_token(subject=str(user.id), email=user.email)
+    return await user_with_mailbox(db, email)
 
 
 async def test_backlog_larger_than_one_run_is_eventually_all_processed(

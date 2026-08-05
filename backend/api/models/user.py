@@ -1,6 +1,7 @@
 import datetime
+import uuid
 
-from sqlalchemy import DateTime, text
+from sqlalchemy import DateTime, ForeignKey, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.models.base import Base, TimestampMixin, _utcnow
@@ -16,6 +17,22 @@ class User(TimestampMixin, Base):
     # CHECK — the valid set grows per provider (D34 precedent).
     provider: Mapped[str] = mapped_column(
         nullable=False, default="google", server_default="google"
+    )
+    # Billing tier: 'free' | 'pro' | 'family' (D44). Drives the mailbox cap and
+    # whether ads show. No DB CHECK — the valid set grows with pricing and is
+    # validated in Python, where an unrecognised value degrades to free rather
+    # than erroring (D34/D38 precedent). Limits live in services/entitlements.py,
+    # never inline. There is no billing integration yet, so this is set
+    # deliberately (admin/manual) and everyone defaults to free.
+    tier: Mapped[str] = mapped_column(
+        nullable=False, default="free", server_default="free"
+    )
+    # The household this user belongs to, if any (D46). NULL = solo account,
+    # which is every user today. Membership is here rather than in a join table
+    # because a user belongs to at most one household — the Family tier is two
+    # parents, not an arbitrary graph.
+    household_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("households.id"), nullable=True, index=True
     )
     # Last date (in REMINDER_TZ) a reminder digest was sent — daily dedup.
     last_reminder_date: Mapped[datetime.date | None] = mapped_column(nullable=True)

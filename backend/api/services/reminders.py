@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.device import Device
 from api.models.item import Item
 from api.models.user import User
+from api.services.households import visible_user_ids
 
 _MAX_LISTED = 5
 
@@ -55,7 +56,11 @@ async def tomorrow_events(db: AsyncSession, user: User, target_date: str) -> lis
     rows = await db.execute(
         select(Item)
         .where(
-            Item.user_id == user.id,
+            # Household members share the calendar (D46), so the digest spans
+            # it too — a "tomorrow's schedule" push that silently omitted the
+            # partner's events would contradict what the app shows. Same
+            # visibility rule, from the one place that defines it.
+            Item.user_id.in_(await visible_user_ids(db, user)),
             Item.deleted_at.is_(None),
             Item.status == "open",
             Item.item_type == "event",

@@ -4,6 +4,8 @@ import '../auth/session_controller.dart';
 import '../core/providers.dart';
 import 'account_service.dart';
 import 'jwt_email.dart';
+import 'household.dart';
+import 'mailboxes.dart';
 
 /// The signed-in account's email, read from the stored session JWT. Null if
 /// no token or no email claim.
@@ -17,3 +19,28 @@ final accountEmailProvider = FutureProvider<String?>((ref) async {
 
 final accountServiceProvider =
     Provider<AccountService>((ref) => AccountService(ref.watch(apiClientProvider)));
+
+/// Mailbox management (D44/D45).
+final mailboxServiceProvider =
+    Provider<MailboxService>((ref) => MailboxService(ref.watch(apiClientProvider)));
+
+/// The account's plan + limits, computed server-side. Recomputed when auth
+/// flips so a previous account's plan can't linger.
+final accountPlanProvider = FutureProvider<AccountPlan>((ref) {
+  ref.watch(sessionProvider);
+  return ref.watch(mailboxServiceProvider).plan();
+});
+
+final mailboxListProvider = FutureProvider<List<Mailbox>>((ref) {
+  ref.watch(sessionProvider);
+  return ref.watch(mailboxServiceProvider).list();
+});
+
+/// Family sharing (D46).
+final householdServiceProvider = Provider<HouseholdService>(
+    (ref) => HouseholdService(ref.watch(apiClientProvider)));
+
+final householdProvider = FutureProvider<HouseholdView>((ref) {
+  ref.watch(sessionProvider);
+  return ref.watch(householdServiceProvider).get();
+});
