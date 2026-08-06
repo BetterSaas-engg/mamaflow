@@ -10,7 +10,7 @@ import 'package:mamaflow/ui/sign_in_screen.dart';
 ///
 /// Reported from a real device: after completing Google consent the app showed
 /// "Page Not Found — GoException: no routes for location:
-/// com.googleusercontent.apps.<id>:/oauth2redirect?code=…" on top of a sign-in
+/// `com.googleusercontent.apps.<id>:/oauth2redirect?code=…`" on top of a sign-in
 /// that had actually succeeded.
 void main() {
   Widget appWith(String initialLocation) {
