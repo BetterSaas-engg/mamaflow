@@ -15,6 +15,17 @@ final _router = GoRouter(
   routes: [
     GoRoute(path: '/', builder: (context, state) => const AuthGate()),
   ],
+  // A deep link is handed to the router as the location to open, and the
+  // Google OAuth callback arrives as one — `com.googleusercontent.apps.<id>:
+  // /oauth2redirect?code=…` (D43 routes it to MainActivity so it survives the
+  // process being killed). That is a CREDENTIAL DELIVERY, not a page: nothing
+  // in the app renders it, so the router 404'd and showed "Page Not Found"
+  // over a sign-in that had actually succeeded.
+  //
+  // Send anything unroutable to the gate, which shows the right screen for the
+  // session — and let app_links hand the callback to the auth code, which is
+  // where it belongs.
+  onException: (context, state, router) => router.go('/'),
 );
 
 class MamaflowApp extends ConsumerWidget {
