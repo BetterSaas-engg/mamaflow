@@ -184,7 +184,7 @@ async def test_a_member_inherits_the_owners_plan(db):
 
     _, limit, _ = await mailbox_usage(db, dad)
 
-    assert limit == 2
+    assert limit == 3  # the plan's three shared mailboxes (D47)
 
 
 # --- invite codes ---

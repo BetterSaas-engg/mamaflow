@@ -26,6 +26,7 @@ from api.services.mail_connections import (
     list_connections,
     remove_connection,
 )
+from api.services.households import accept_invite, create_invite
 from api.services.reader_errors import ReauthRequired
 from api.services.users import get_or_create_user
 
@@ -656,3 +657,72 @@ async def test_add_google_mailbox_requires_authentication(client):
         json={"code": "c", "code_verifier": "v"},
     )
     assert resp.status_code == 401
+
+
+# --- The Family cap is shared across the household (D47) ---
+
+
+async def test_family_mailboxes_are_shared_across_the_household(db):
+    """The cap is 3 for the PLAN, not 3 each.
+
+    This is the whole point of the D47 re-price: at 2-per-member Family billed
+    4 mailboxes to Pro's 2, so it cost ~2x Pro to serve — backwards for a
+    premium tier. Counting per-user while reading a household-scoped limit was
+    worse still: 3 each = 6.
+    """
+    mum, _ = await _user(db, email="mum@example.com", tier="family")
+    dad, _ = await _user(db, email="dad@example.com")
+    _, code = await create_invite(db, mum)
+    await accept_invite(db, dad, code)
+
+    await ensure_connection(db, mum, "google", "mum@example.com")
+    await ensure_connection(db, mum, "yahoo", "mum@yahoo.com")
+    # Third mailbox, connected by the OTHER parent — still inside the plan.
+    await ensure_connection(db, dad, "google", "dad@example.com")
+
+    with pytest.raises(MailboxLimitReached):
+        await ensure_connection(db, dad, "icloud", "dad@icloud.com")
+
+
+async def test_the_household_usage_readout_is_plan_wide(db):
+    """Both parents must see the same "N of 3" — a per-user readout would tell
+    each of them they had room when the plan was full."""
+    from api.services.mail_connections import mailbox_usage
+
+    mum, _ = await _user(db, email="mum@example.com", tier="family")
+    dad, _ = await _user(db, email="dad@example.com")
+    _, code = await create_invite(db, mum)
+    await accept_invite(db, dad, code)
+    await ensure_connection(db, mum, "google", "mum@example.com")
+    await ensure_connection(db, dad, "google", "dad@example.com")
+
+    assert await mailbox_usage(db, mum) == (2, 3, True)
+    assert await mailbox_usage(db, dad) == (2, 3, True)
+
+
+async def test_a_solo_users_count_is_still_their_own(db):
+    """Regression guard on splitting the count: a solo account must not start
+    counting anyone else's mailboxes."""
+    from api.services.mail_connections import mailbox_usage
+
+    alice, _ = await _user(db, email="alice@example.com", tier="pro")
+    bob, _ = await _user(db, email="bob@example.com", tier="pro")
+    await ensure_connection(db, alice, "google", "alice@example.com")
+    await ensure_connection(db, bob, "google", "bob@example.com")
+
+    assert await mailbox_usage(db, alice) == (1, 2, True)
+
+
+async def test_sync_eligibility_stays_per_user(db):
+    """auto_sync asks "does THIS user have a mailbox to sync". Household-scoping
+    that would make a mailbox-less member look syncable and waste a run."""
+    from api.services.mail_connections import connection_count
+
+    mum, _ = await _user(db, email="mum@example.com", tier="family")
+    dad, _ = await _user(db, email="dad@example.com")
+    _, code = await create_invite(db, mum)
+    await accept_invite(db, dad, code)
+    await ensure_connection(db, mum, "google", "mum@example.com")
+
+    assert await connection_count(db, mum.id) == 1
+    assert await connection_count(db, dad.id) == 0
