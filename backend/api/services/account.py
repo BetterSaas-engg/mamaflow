@@ -20,6 +20,7 @@ from api.models.mail_connection import MailConnection
 from api.models.user import User
 from api.services.households import dissolve_or_leave
 from api.services.mail_connections import list_connections
+from api.services.subscriptions import reset_billing_state
 
 _log = logging.getLogger(__name__)
 
@@ -87,6 +88,11 @@ async def delete_account(db: AsyncSession, user: User) -> None:
     # sign-in reactivates the row with its membership intact and restores
     # sharing without consent.
     await dissolve_or_leave(db, user)
+    # Back to the free baseline. Their `subscriptions` rows are deliberately
+    # left alone — the store may still be charging them, and that row is what
+    # we would need to answer a refund. Keeping tier honest while deleted is
+    # what lets reactivation simply re-derive.
+    reset_billing_state(user)
 
     await db.execute(
         update(Item).where(Item.user_id == user.id, Item.deleted_at.is_(None))

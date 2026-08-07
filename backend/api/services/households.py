@@ -25,7 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.household import Household, HouseholdInvite
 from api.models.user import User
-from api.services.entitlements import entitlements_for, higher_tier, member_limit
+from api.services.entitlements import higher_tier, member_limit
+from api.services.subscriptions import effective_tier
 
 INVITE_TTL_DAYS = 14
 
@@ -121,8 +122,8 @@ async def plan_tier(db: AsyncSession, user: User) -> str:
     """
     owner = await plan_owner(db, user)
     if owner.id == user.id:
-        return entitlements_for(user.tier).tier
-    return higher_tier(owner.tier, user.tier)
+        return effective_tier(user)
+    return higher_tier(effective_tier(owner), effective_tier(user))
 
 
 async def ensure_household(db: AsyncSession, owner: User) -> Household:

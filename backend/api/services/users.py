@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config.settings import settings
 from api.models.user import User
+from api.services.subscriptions import recompute_tier, reset_billing_state
 
 _log = logging.getLogger(__name__)
 
@@ -50,6 +51,12 @@ async def get_or_create_user(
             # delete_account already clears this; belt and braces, because the
             # failure is silent and cross-user.
             user.household_id = None
+            # Same for the plan: clearing deleted_at used to leave `tier`
+            # untouched, so delete-then-sign-back-in kept a paid tier for free.
+            # Reset FIRST, then re-derive from any live subscription below —
+            # order matters: a customer the store is still charging must come
+            # back paid, and only a derivation can tell the difference.
+            reset_billing_state(user)
             changed = True
         if user.provider != provider:
             user.provider = provider
@@ -57,6 +64,7 @@ async def get_or_create_user(
         if changed:
             await db.commit()
             await db.refresh(user)
+            await recompute_tier(db, user)
         return user
 
     user = User(email=normalized, provider=provider)

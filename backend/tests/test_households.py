@@ -536,3 +536,86 @@ async def test_an_unknown_tier_still_degrades_to_free_through_plan_tier(db):
     solo, _ = await _user(db, "solo@example.com", tier="enterprise-lol")
 
     assert await plan_tier(db, solo) == "free"
+
+
+# --- delete-then-return must not keep a paid plan for free (D47) ---
+
+
+async def test_deleting_and_re_signing_in_does_not_keep_a_paid_tier(db):
+    """Deletion soft-deletes the row and sign-in REACTIVATES it. Clearing
+    deleted_at while leaving `tier` untouched gave a free upgrade to anyone who
+    deleted their account and came back."""
+    from api.services.account import delete_account
+
+    user, _ = await _user(db, "payer@example.com", tier="pro")
+
+    await delete_account(db, user)
+    revived = await get_or_create_user(db, "payer@example.com")
+
+    assert revived.tier == "free"
+
+
+async def test_a_still_paying_user_who_returns_gets_their_plan_back(db):
+    """The partner test, and the reason this is a re-derivation rather than a
+    blanket wipe: the store may still be charging them."""
+    import datetime as dt
+
+    from api.models.subscription import Subscription
+    from api.services.account import delete_account
+
+    user, _ = await _user(db, "payer@example.com", tier="pro")
+    db.add(
+        Subscription(
+            user_id=user.id,
+            app_user_id=str(user.id),
+            store="app_store",
+            store_original_id="orig-live",
+            product_id="mamaflow_pro_monthly",
+            entitlement_id="pro",
+            tier="pro",
+            status="active",
+            current_period_end=dt.datetime.now(dt.UTC) + dt.timedelta(days=20),
+        )
+    )
+    await db.commit()
+
+    await delete_account(db, user)
+    revived = await get_or_create_user(db, "payer@example.com")
+
+    assert revived.tier == "pro"
+
+
+async def test_deletion_clears_a_manual_override_too(db):
+    """Otherwise a comped account returns comped, invisibly."""
+    from api.services.account import delete_account
+
+    user, _ = await _user(db, "comped@example.com")
+    user.tier_override = "family"
+    await db.commit()
+
+    await delete_account(db, user)
+    revived = await get_or_create_user(db, "comped@example.com")
+
+    assert revived.tier_override is None
+
+
+async def test_reactivation_alone_never_restores_a_paid_tier(db):
+    """Belt and braces, and the ONLY test that covers the reactivation reset.
+
+    test_deleting_and_re_signing_in_does_not_keep_a_paid_tier passes even
+    without it, because delete_account already resets the tier — so it proves
+    nothing about this path. Here the row is soft-deleted DIRECTLY, leaving the
+    paid tier intact, which is the state an older delete path (or a manual DB
+    edit) would leave behind.
+    """
+    import datetime as dt
+
+    user, _ = await _user(db, "payer@example.com", tier="pro")
+    user.tier_override = "family"
+    user.deleted_at = dt.datetime.now(dt.UTC)
+    await db.commit()
+
+    revived = await get_or_create_user(db, "payer@example.com")
+
+    assert revived.tier == "free"
+    assert revived.tier_override is None
