@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # Throttle for the last_seen_at write (it runs on every authed request;
     # the value only needs day-level accuracy).
     last_seen_throttle_seconds: int = 3600
+    # Shared secret RevenueCat sends in the Authorization header of every
+    # webhook. Env only, never the DB (D4). Empty = the endpoint refuses
+    # everything, because an unconfigured webhook that accepts is exactly how a
+    # staging URL becomes a tier-granting oracle.
+    revenuecat_webhook_secret: str = ""
     database_url: str = "postgresql://localhost:5432/mamaflow"
     environment: str = "development"
     # Gmail token persistence (D4: never the DB): "memory" (dev default; lost on
@@ -147,6 +152,21 @@ class Settings(BaseSettings):
         if self.environment != "development" and self.secret_key in _WEAK_SECRETS:
             raise ValueError(
                 "SECRET_KEY must be set to a strong value when ENVIRONMENT != development"
+            )
+        # The webhook secret is the ONLY thing between the internet and a free
+        # family tier — there is no body signature to fall back on. Fail hard
+        # rather than warn, same as SECRET_KEY: a paid product that boots with
+        # an unset or placeholder billing secret is worse than one that doesn't
+        # boot. Empty is allowed outside production only so a staging deploy
+        # without billing still starts (the route then 503s).
+        if self.environment == "production" and (
+            not self.revenuecat_webhook_secret
+            or self.revenuecat_webhook_secret in _WEAK_SECRETS
+            or len(self.revenuecat_webhook_secret) < 32
+        ):
+            raise ValueError(
+                "REVENUECAT_WEBHOOK_SECRET must be set to a strong value "
+                "(>= 32 chars) when ENVIRONMENT=production"
             )
         # RFC 7518 §3.2 wants >= 256 bits for HMAC-SHA256; PyJWT warns below
         # that. Deliberately a WARNING, not a hard failure: refusing to boot

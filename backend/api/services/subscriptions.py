@@ -204,3 +204,206 @@ def reset_billing_state(user: User) -> None:
     """
     user.tier = DEFAULT_TIER
     clear_override(user)
+
+
+# --- applying a RevenueCat event ---------------------------------------------
+
+# What each event type means for the subscription's status. Anything absent is
+# recorded and ignored rather than guessed at (D34 coerce-don't-reject) — a new
+# RevenueCat event type must never be interpreted as a revocation by accident.
+_STATUS_BY_EVENT = {
+    "INITIAL_PURCHASE": "active",
+    "RENEWAL": "active",
+    "PRODUCT_CHANGE": "active",
+    "UNCANCELLATION": "active",
+    "NON_RENEWING_PURCHASE": "active",
+    "SUBSCRIPTION_EXTENDED": "active",
+    "TRANSFER": "active",
+    "CANCELLATION": None,  # "won't renew" — status deliberately unchanged
+    "BILLING_ISSUE": "in_retry",
+    "SUBSCRIPTION_PAUSED": "paused",
+    "EXPIRATION": "expired",
+}
+KNOWN_EVENT_TYPES = frozenset(_STATUS_BY_EVENT) | {"SUBSCRIBER_ALIAS", "TEST"}
+
+_STORE_BY_RC = {
+    "APP_STORE": "app_store",
+    "MAC_APP_STORE": "app_store",
+    "PLAY_STORE": "play_store",
+    "STRIPE": "stripe",
+    "PROMOTIONAL": "promotional",
+    "RC_BILLING": "rc_billing",
+}
+
+
+def _ms(value) -> datetime.datetime | None:
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(value / 1000, tz=datetime.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def status_for_event(event_type: str, cancel_reason: str | None) -> str | None:
+    """The status this event implies, or None to leave it alone.
+
+    `CANCELLATION` is the one that matters: it means the user turned off
+    auto-renew, NOT that access ended — so it must not change the status. The
+    exception is a refund, which RevenueCat also delivers as CANCELLATION but
+    with a refund-ish reason.
+    """
+    if event_type == "CANCELLATION":
+        if (cancel_reason or "").upper() in {"CUSTOMER_SUPPORT", "REFUND"}:
+            return "refunded"
+        return None
+    return _STATUS_BY_EVENT.get(event_type)
+
+
+async def apply_event(db: AsyncSession, event: dict, expected_environment: str):
+    """Fold one RevenueCat event into `subscriptions` and return
+    (outcome, subscription, user).
+
+    Never raises on a malformed or unfamiliar event — those are recorded and
+    ignored, because a permanently unprocessable event that 500s would be
+    retried by RevenueCat forever and poison the delivery queue.
+    """
+    event_type = str(event.get("type") or "")
+    environment = str(event.get("environment") or "PRODUCTION").upper()
+    expected = "SANDBOX" if expected_environment == "sandbox" else "PRODUCTION"
+    if environment != expected:
+        # A sandbox purchase must never grant a real plan. Ignored, not
+        # retried: it is a valid delivery we deliberately drop.
+        return "ignored_sandbox", None, None
+    if event_type not in KNOWN_EVENT_TYPES:
+        return "ignored_unknown_type", None, None
+    if event_type in {"SUBSCRIBER_ALIAS", "TEST"}:
+        return "ignored_unknown_type", None, None
+
+    app_user_id = str(event.get("app_user_id") or "").strip()
+    store = _STORE_BY_RC.get(str(event.get("store") or "").upper(), "unknown")
+    original_id = str(
+        event.get("original_transaction_id")
+        or event.get("transaction_id")
+        or event.get("id")
+        or ""
+    ).strip()
+    if not original_id:
+        return "ignored_unknown_type", None, None
+
+    event_at = _ms(event.get("event_timestamp_ms")) or datetime.datetime.now(
+        datetime.timezone.utc
+    )
+    user = await _resolve_user(db, app_user_id, store, original_id)
+
+    rows = await db.execute(
+        select(Subscription).where(
+            Subscription.store == store,
+            Subscription.store_original_id == original_id,
+        )
+    )
+    sub = rows.scalar_one_or_none()
+
+    if sub is not None and sub.last_event_at is not None:
+        if event_at <= _aware(sub.last_event_at):
+            # Out of order. Ignore rather than apply — a later event has
+            # already been folded in, and re-applying an older one would undo
+            # it. Recorded so a redelivery does not repeat the no-op forever.
+            return "ignored_stale", sub, user
+
+    product_id = str(event.get("product_id") or "")
+    entitlement_id = str(
+        event.get("entitlement_id")
+        or (event.get("entitlement_ids") or [None])[0]
+        or ""
+    ) or None
+    cancel_reason = event.get("cancel_reason")
+    new_status = status_for_event(event_type, cancel_reason)
+
+    if sub is None:
+        sub = Subscription(
+            app_user_id=app_user_id,
+            store=store,
+            store_original_id=original_id,
+            product_id=product_id,
+            entitlement_id=entitlement_id,
+            tier=tier_for_product(product_id, entitlement_id),
+            status=new_status or "active",
+        )
+        db.add(sub)
+    else:
+        if product_id:
+            sub.product_id = product_id
+            sub.entitlement_id = entitlement_id
+            sub.tier = tier_for_product(product_id, entitlement_id)
+        if new_status is not None:
+            sub.status = new_status
+
+    sub.user_id = user.id if user is not None else sub.user_id
+    if app_user_id:
+        sub.app_user_id = app_user_id
+    sub.last_event_type = event_type
+    sub.last_event_at = event_at
+    if (period_end := _ms(event.get("expiration_at_ms"))) is not None:
+        sub.current_period_end = period_end
+    if (grace := _ms(event.get("grace_period_expiration_at_ms"))) is not None:
+        sub.grace_period_end = grace
+    if period_type := event.get("period_type"):
+        sub.period_type = str(period_type).lower()
+    sub.environment = expected_environment
+
+    if event_type == "CANCELLATION":
+        sub.will_renew = False
+        sub.unsubscribe_detected_at = event_at
+    elif event_type in {"UNCANCELLATION", "RENEWAL", "INITIAL_PURCHASE"}:
+        sub.will_renew = True
+    if event_type == "BILLING_ISSUE":
+        sub.billing_issue_detected_at = event_at
+    if sub.status == "refunded":
+        sub.refunded_at = event_at
+        # Do not trust the store to have moved the expiry — Apple's refund can
+        # arrive with it intact. Clamp it so nothing downstream can read the
+        # row as still paid.
+        end = _aware(sub.current_period_end)
+        sub.current_period_end = min(end, event_at) if end else event_at
+
+    await db.commit()
+    if user is not None:
+        await recompute_tier(db, user, expected_environment=expected_environment)
+    return ("applied" if user is not None else "unresolved_user"), sub, user
+
+
+async def _resolve_user(db: AsyncSession, app_user_id: str, store: str, original_id: str):
+    """Map RevenueCat's app_user_id to our user.
+
+    Orphans are expected, not exceptional: RevenueCat mints `$RCAnonymousID:…`
+    before login, so a purchase made on the paywall before sign-in has no user
+    yet. Falling back to the existing row's owner is what makes such a purchase
+    resolve on its first RENEWAL even if the app never called the link endpoint.
+    """
+    import uuid as _uuid
+
+    if app_user_id:
+        try:
+            user_id = _uuid.UUID(app_user_id)
+        except (ValueError, AttributeError, TypeError):
+            user_id = None
+        if user_id is not None:
+            # Soft-deleted users are accepted deliberately: the row exists and
+            # the store is still charging them. Writing a tier there is inert
+            # (a deleted user is 401'd), and it keeps tier == f(subscriptions)
+            # true unconditionally, which is what lets reactivation just derive.
+            user = await db.get(User, user_id)
+            if user is not None:
+                return user
+    rows = await db.execute(
+        select(Subscription).where(
+            Subscription.store == store,
+            Subscription.store_original_id == original_id,
+            Subscription.user_id.is_not(None),
+        )
+    )
+    existing = rows.scalar_one_or_none()
+    if existing is not None:
+        return await db.get(User, existing.user_id)
+    return None

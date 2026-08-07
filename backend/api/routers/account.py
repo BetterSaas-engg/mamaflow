@@ -5,6 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import get_current_user
@@ -12,9 +13,11 @@ from api.auth.imap_auth import ImapAuthRequest, verify_and_store_imap_mailbox
 from api.auth.oauth import exchange_code_pkce
 from api.auth.token_store import store_token
 from api.db.session import get_db
+from api.models.subscription import Subscription
 from api.models.user import User
 from api.services.account import delete_account
 from api.services.entitlements import entitlements_for
+from api.routers.webhooks import _expected_environment
 from api.services import auth_throttle
 from api.services.households import (
     AlreadyInHousehold,
@@ -31,6 +34,7 @@ from api.services.households import (
     remove_member,
     revoke_invite,
 )
+from api.services.subscriptions import recompute_tier
 from api.services.users import normalize_email
 from api.services.mail_connections import (
     MailboxAlreadyConnected,
@@ -462,3 +466,68 @@ async def revoke_household_invite(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found"
         )
+
+
+# --- Billing linkage (D47) ---
+
+
+class LinkBillingRequest(BaseModel):
+    app_user_id: str
+
+
+@router.post("/billing/link", response_model=AccountMe)
+async def link_billing(
+    payload: LinkBillingRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AccountMe:
+    """Attach purchases made under `app_user_id` to the signed-in account.
+
+    This is also "Restore purchases", and the app should call it on every cold
+    start after login — it is the cheapest reconciliation there is.
+
+    Orphans are expected: RevenueCat mints `$RCAnonymousID:…` before login, so
+    a purchase made on the paywall before signing in has no user attached yet.
+
+    **It refuses a subscription already owned by someone else.** Without that
+    rule, knowing another user's app_user_id would be an entitlement-theft
+    endpoint — and the identifier is chosen by the caller, so it is throttled
+    for the same reason.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = auth_throttle.check(client_ip, user.email)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again in a few minutes.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    app_user_id = payload.app_user_id.strip()
+    if app_user_id:
+        rows = await db.execute(
+            select(Subscription).where(
+                Subscription.app_user_id == app_user_id,
+                Subscription.deleted_at.is_(None),
+            )
+        )
+        for sub in rows.scalars():
+            if sub.user_id is None:
+                sub.user_id = user.id
+            elif sub.user_id != user.id:
+                auth_throttle.record_failure(client_ip, user.email)
+                _log.error(
+                    "billing link: user %s tried to claim a subscription owned "
+                    "by %s",
+                    user.id,
+                    sub.user_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Those purchases belong to another account.",
+                )
+        await db.commit()
+
+    await recompute_tier(db, user, expected_environment=_expected_environment())
+    return await read_me(user=user, db=db)
