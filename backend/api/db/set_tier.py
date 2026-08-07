@@ -19,8 +19,8 @@ import sys
 from sqlalchemy import select
 
 from api.db.session import AsyncSessionLocal
-from api.models.mail_connection import MailConnection
 from api.models.user import User
+from api.services.mail_connections import plan_connection_count
 from api.services.entitlements import TIERS, entitlements_for
 from api.services.users import normalize_email
 
@@ -56,13 +56,10 @@ async def set_tier(email: str, tier: str) -> None:
                 f"{tier} allows {ent.members}. Existing members keep sharing "
                 "until one leaves."
             )
-        connections = await db.execute(
-            select(MailConnection.id).where(
-                MailConnection.user_id == user.id,
-                MailConnection.deleted_at.is_(None),
-            )
-        )
-        mailbox_count = len(list(connections))
+        # Plan-wide, not per-user: a Family household's mailboxes are shared
+        # (D47), so counting only this user's would under-report and the
+        # warning would stay silent on exactly the downgrade that strands them.
+        mailbox_count = await plan_connection_count(db, user)
         if mailbox_count > ent.mailboxes:
             print(
                 f"WARNING: {email} has {mailbox_count} mailboxes, but {tier} "

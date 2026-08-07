@@ -483,3 +483,56 @@ async def test_the_reminder_digest_covers_the_shared_calendar(db):
     titles = {i.event_title for i in await tomorrow_events(db, mum, tomorrow)}
 
     assert "Dentist" in titles
+
+
+# --- plan_tier: the one answer for "which tier governs this user" (D47) ---
+
+
+async def test_a_member_who_pays_gets_what_they_bought(db):
+    """Every entitlement read routes through the household OWNER. If a member
+    is the one who paid, resolving only the owner's tier would serve them the
+    owner's free allowance — they paid and got nothing, with nothing in the UI
+    to explain it."""
+    from api.services.households import plan_tier
+    from api.services.mail_connections import mailbox_usage
+
+    owner, _ = await _user(db, "owner@example.com", tier="family")
+    payer, _ = await _user(db, "payer@example.com")
+    await _join(db, owner, payer)
+    # The owner's own plan lapses; the member is the live subscriber.
+    owner.tier = "free"
+    payer.tier = "family"
+    await db.commit()
+
+    assert await plan_tier(db, payer) == "family"
+    _, limit, _ = await mailbox_usage(db, payer)
+    assert limit == 3
+
+
+async def test_the_more_generous_tier_wins_whichever_side_holds_it(db):
+    """Order-independent: it must not matter who in the household is the payer."""
+    from api.services.households import plan_tier
+
+    owner, _ = await _user(db, "owner@example.com", tier="family")
+    member, _ = await _user(db, "member@example.com")
+    await _join(db, owner, member)
+
+    assert await plan_tier(db, member) == "family"  # owner holds it
+    assert await plan_tier(db, owner) == "family"
+
+
+async def test_a_solo_user_gets_their_own_tier(db):
+    from api.services.households import plan_tier
+
+    solo, _ = await _user(db, "solo@example.com", tier="pro")
+
+    assert await plan_tier(db, solo) == "pro"
+
+
+async def test_an_unknown_tier_still_degrades_to_free_through_plan_tier(db):
+    """The fail-closed rule must survive the household indirection."""
+    from api.services.households import plan_tier
+
+    solo, _ = await _user(db, "solo@example.com", tier="enterprise-lol")
+
+    assert await plan_tier(db, solo) == "free"

@@ -51,6 +51,23 @@ _TIERS: dict[str, Entitlements] = {
 
 TIERS = tuple(_TIERS)
 
+# Ascending generosity. Declared once so nothing hardcodes an ordering, and so
+# adding a tier is a single edit here.
+TIER_RANK = (FREE, PRO, FAMILY)
+
+
+def higher_tier(a: str | None, b: str | None) -> str:
+    """The more generous of two tiers.
+
+    Order-independent by construction, which is what makes it safe to combine
+    tiers that arrive from different places (a household owner and a member, or
+    two overlapping subscriptions) without caring which was seen first.
+    Unrecognised values normalise to free via entitlements_for.
+    """
+    rank_a = TIER_RANK.index(entitlements_for(a).tier)
+    rank_b = TIER_RANK.index(entitlements_for(b).tier)
+    return TIER_RANK[max(rank_a, rank_b)]
+
 
 def entitlements_for(tier: str | None) -> Entitlements:
     """Limits for `tier`, falling back to free for anything unrecognised.

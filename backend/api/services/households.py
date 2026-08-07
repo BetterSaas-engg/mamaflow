@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.household import Household, HouseholdInvite
 from api.models.user import User
-from api.services.entitlements import member_limit
+from api.services.entitlements import entitlements_for, higher_tier, member_limit
 
 INVITE_TTL_DAYS = 14
 
@@ -103,6 +103,26 @@ async def plan_owner(db: AsyncSession, user: User) -> User:
     if owner is None or owner.deleted_at is not None:
         return user
     return owner
+
+
+async def plan_tier(db: AsyncSession, user: User) -> str:
+    """The tier that actually governs this user — the single answer.
+
+    Takes the MORE GENEROUS of the household owner's tier and the user's own,
+    rather than just the owner's. The case that forces it: a household MEMBER
+    may be the one who paid. Every entitlement read routes through plan_owner,
+    so without the max a member who bought Family would be served the owner's
+    free allowance — they paid and got nothing, with nothing in the UI to
+    explain it.
+
+    Consequence accepted: a household whose member is the payer keeps the plan
+    if that member leaves, and the owner drops back to their own tier. That is
+    right — one bill, whoever pays it.
+    """
+    owner = await plan_owner(db, user)
+    if owner.id == user.id:
+        return entitlements_for(user.tier).tier
+    return higher_tier(owner.tier, user.tier)
 
 
 async def ensure_household(db: AsyncSession, owner: User) -> Household:
@@ -290,6 +310,7 @@ __all__ = [
     "members",
     "pending_invites",
     "plan_owner",
+    "plan_tier",
     "remove_member",
     "revoke_invite",
     "visible_user_ids",

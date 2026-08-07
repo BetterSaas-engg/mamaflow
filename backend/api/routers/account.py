@@ -27,6 +27,7 @@ from api.services.households import (
     members,
     pending_invites,
     plan_owner,
+    plan_tier,
     remove_member,
     revoke_invite,
 )
@@ -85,8 +86,9 @@ async def read_me(
     Counts come from live connection rows, so the number the client shows and
     the number the cap is enforced against are the same one.
     """
-    # Members inherit the household owner's plan.
-    ent = entitlements_for((await plan_owner(db, user)).tier)
+    # Members inherit the household owner's plan (or keep their own, if they
+    # are the payer) — plan_tier is the one place that decides.
+    ent = entitlements_for(await plan_tier(db, user))
     connected, limit, can_add = await mailbox_usage(db, user)
     return AccountMe(
         id=str(user.id),
@@ -307,7 +309,7 @@ async def read_household(
     db: AsyncSession = Depends(get_db),
 ) -> HouseholdView:
     owner = await plan_owner(db, user)
-    limit = entitlements_for(owner.tier).members
+    limit = entitlements_for(await plan_tier(db, user)).members
     if user.household_id is None:
         return HouseholdView(
             exists=False,
