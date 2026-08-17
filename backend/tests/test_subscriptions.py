@@ -257,3 +257,77 @@ async def test_recompute_does_not_touch_the_override(db):
     assert await recompute_tier(db, user, NOW) == FREE
     # ...but what the user actually gets is unchanged.
     assert effective_tier(user, NOW) == FAMILY
+
+
+# --- the sweeper: the only thing that catches a LOST expiry event ---
+
+
+async def test_the_sweeper_downgrades_a_lapsed_subscription(db, session_factory):
+    """RevenueCat gives up retrying after ~72h. Without this, a dropped
+    EXPIRATION entitles a lapsed subscription forever — nothing else in the
+    system ever looks at that row again."""
+    from api.services.subscriptions import sweep_lapsed
+
+    user = await get_or_create_user(db, "lapsed@example.com")
+    db.add(
+        _sub(
+            user_id=user.id,
+            app_user_id=str(user.id),
+            # Still marked active: the EXPIRATION webhook never arrived.
+            status="active",
+            current_period_end=EARLIER,
+        )
+    )
+    user.tier = PRO
+    await db.commit()
+
+    moved = await sweep_lapsed(session_factory, now=NOW)
+
+    await db.refresh(user)
+    assert moved == 1
+    assert user.tier == FREE
+
+
+async def test_the_sweeper_leaves_active_and_grace_alone(db, session_factory):
+    """Partner test — without it, "downgrade everyone" passes."""
+    from api.services.subscriptions import sweep_lapsed
+
+    active = await get_or_create_user(db, "active@example.com")
+    grace = await get_or_create_user(db, "grace@example.com")
+    db.add(_sub(user_id=active.id, app_user_id=str(active.id), store_original_id="a"))
+    db.add(
+        _sub(
+            user_id=grace.id,
+            app_user_id=str(grace.id),
+            store_original_id="b",
+            status="in_grace",
+            current_period_end=EARLIER,
+            grace_period_end=LATER,
+        )
+    )
+    active.tier = PRO
+    grace.tier = PRO
+    await db.commit()
+
+    moved = await sweep_lapsed(session_factory, now=NOW)
+
+    await db.refresh(active)
+    await db.refresh(grace)
+    assert moved == 0
+    assert active.tier == PRO
+    assert grace.tier == PRO
+
+
+async def test_the_sweeper_does_not_touch_an_override(db, session_factory):
+    """A tester on a --forever grant must not be swept back to free."""
+    from api.services.subscriptions import effective_tier, sweep_lapsed
+
+    user = await get_or_create_user(db, "tester@example.com")
+    user.tier_override = FAMILY
+    user.tier_override_reason = "beta"
+    await db.commit()
+
+    await sweep_lapsed(session_factory, now=NOW)
+
+    await db.refresh(user)
+    assert effective_tier(user, NOW) == FAMILY

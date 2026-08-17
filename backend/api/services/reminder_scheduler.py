@@ -80,7 +80,10 @@ def start_scheduler() -> None:
     global _scheduler
     want_reminders = push_sender.is_configured()
     want_auto_sync = settings.auto_sync_enabled
-    if not (want_reminders or want_auto_sync):
+    # Only worth running where billing is actually configured — elsewhere there
+    # are no subscription rows to sweep.
+    want_billing_sweep = bool(settings.revenuecat_webhook_secret)
+    if not (want_reminders or want_auto_sync or want_billing_sweep):
         _log.info("scheduler: no jobs wanted — not started")
         return
     from apscheduler.triggers.cron import CronTrigger
@@ -108,9 +111,28 @@ def start_scheduler() -> None:
             id="auto_sync_tick",
             replace_existing=True,
         )
+    if want_billing_sweep:
+        # A lost EXPIRATION would otherwise entitle a lapsed subscription
+        # forever — nothing else ever revisits that row.
+        from api.routers.webhooks import _expected_environment
+        from api.services.subscriptions import sweep_lapsed
+
+        _scheduler.add_job(
+            sweep_lapsed,
+            CronTrigger(minute=15),
+            kwargs={
+                "session_factory": session_factory,
+                "expected_environment": _expected_environment(),
+            },
+            id="billing_sweep",
+            replace_existing=True,
+        )
     _scheduler.start()
     _log.info(
-        "scheduler started (reminders=%s, auto_sync=%s)", want_reminders, want_auto_sync
+        "scheduler started (reminders=%s, auto_sync=%s, billing_sweep=%s)",
+        want_reminders,
+        want_auto_sync,
+        want_billing_sweep,
     )
 
 

@@ -407,3 +407,55 @@ async def _resolve_user(db: AsyncSession, app_user_id: str, store: str, original
     if existing is not None:
         return await db.get(User, existing.user_id)
     return None
+
+
+async def sweep_lapsed(
+    session_factory,
+    *,
+    now: datetime.datetime | None = None,
+    expected_environment: str = "production",
+) -> int:
+    """Downgrade users whose access has quietly run out. Returns how many moved.
+
+    Exists because a webhook can be lost. RevenueCat retries for ~72h and then
+    gives up, so a dropped EXPIRATION would otherwise entitle a lapsed
+    subscription **forever** — nothing else in the system ever looks at that row
+    again.
+
+    Deliberately hourly rather than on every read: recomputing inside
+    `/account/me` would add a query per request and make the tier a function of
+    read traffic, so a dormant user would never downgrade at all. The cost is up
+    to an hour of over-entitlement, which is the correct direction to be wrong —
+    a paying parent locked out of their calendar is far worse than a lapsed one
+    getting an extra hour.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    moved = 0
+    async with session_factory() as db:
+        # Only users holding a row that has actually lapsed. The index on
+        # current_period_end is what keeps this off a table scan.
+        rows = await db.execute(
+            select(Subscription.user_id)
+            .where(
+                Subscription.user_id.is_not(None),
+                Subscription.deleted_at.is_(None),
+                Subscription.current_period_end.is_not(None),
+                Subscription.current_period_end <= now,
+            )
+            .distinct()
+        )
+        user_ids = [r[0] for r in rows]
+        for user_id in user_ids:
+            user = await db.get(User, user_id)
+            if user is None:
+                continue
+            before = user.tier
+            after = await recompute_tier(
+                db, user, now, expected_environment=expected_environment
+            )
+            if before != after:
+                moved += 1
+    if moved:
+        # Counts only — never who or what they bought.
+        _log.info("billing sweep: %d user(s) changed tier", moved)
+    return moved
