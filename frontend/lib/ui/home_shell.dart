@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../ads/ad_banner_slot.dart'
     if (dart.library.js_interop) '../ads/ad_banner_slot_stub.dart';
+import '../account/account_providers.dart';
 import '../core/providers.dart';
 import 'calendar_screen.dart';
 import 'home_screen.dart';
@@ -42,7 +43,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final showAds = ref.watch(adsEnabledProvider);
+    final showAds = ref.watch(serverAdsEnabledProvider);
     return Scaffold(
       body: adAnchoredBody(
         showAds: showAds,

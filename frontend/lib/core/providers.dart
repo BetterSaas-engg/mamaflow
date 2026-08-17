@@ -62,6 +62,10 @@ const _webClientId =
 // lib/ads/ imports the ad SDK. Wrapped in a provider so widget tests can flip it.
 const kShowAds = bool.fromEnvironment('SHOW_ADS', defaultValue: false);
 
+/// Whether to show ads. Overridden in account_providers.dart to follow the
+/// SERVER's answer (a paid plan is ad-free) — declared here so nothing outside
+/// lib/ads/ has to import the ad SDK, and so lib/ads/ never imports app code
+/// (the D19 isolation the ad tests enforce).
 final adsEnabledProvider = Provider<bool>((ref) => kShowAds);
 
 final tokenStoreProvider =

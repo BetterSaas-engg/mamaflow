@@ -50,6 +50,10 @@ dependencies:
   app_links: ^6.3.2
   crypto: ^3.0.0               # PKCE S256 challenge
   url_launcher: ^6.3.2
+  # In-app purchases (D47). Wraps StoreKit + Play Billing so we don't own
+  # the store-notification state machine (renewals, grace, retry, refunds,
+  # upgrades, restore) — see docs/billing.md for what that machine costs.
+  purchases_flutter: ^10.8.0
   flutter_animate: ^4.5.0      # tasteful UI motion (staggered entrances, done/dismiss)
 
 dev_dependencies:

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../account/account_providers.dart';
 import '../account/household_screen.dart';
 import '../account/mailboxes_screen.dart';
+import '../account/paywall_screen.dart';
 import '../auth/session_controller.dart';
 
 /// Account settings: connected email, sign out, and delete account.
@@ -21,6 +22,32 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.account_circle_outlined),
             title: const Text('Signed in as'),
             subtitle: Text(email.value ?? '—'),
+          ),
+          const Divider(height: 1),
+          Consumer(
+            builder: (context, ref, _) {
+              final plan = ref.watch(accountPlanProvider);
+              return ListTile(
+                leading: const Icon(Icons.workspace_premium_outlined),
+                title: Text(plan.maybeWhen(
+                  data: (p) => '${p.tierLabel} plan',
+                  orElse: () => 'Plan',
+                )),
+                subtitle: Text(plan.maybeWhen(
+                  data: (p) => p.tier == 'free'
+                      ? 'More inboxes and no ads'
+                      : 'Manage or change your plan',
+                  orElse: () => '',
+                )),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const PaywallScreen()),
+                  );
+                  ref.invalidate(accountPlanProvider);
+                },
+              );
+            },
           ),
           const Divider(height: 1),
           ListTile(

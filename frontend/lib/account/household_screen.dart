@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/errors.dart';
 import '../theme/tokens.dart';
 import 'account_providers.dart';
 import 'household.dart';
@@ -115,7 +116,7 @@ class HouseholdScreen extends ConsumerWidget {
         ),
       );
     } on DioException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(_detail(e))));
+      messenger.showSnackBar(SnackBar(content: Text(messageFor(e))));
     }
   }
 
@@ -165,7 +166,7 @@ class HouseholdScreen extends ConsumerWidget {
       ref.invalidate(householdProvider);
       ref.invalidate(accountPlanProvider);
     } on DioException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(_detail(e))));
+      messenger.showSnackBar(SnackBar(content: Text(messageFor(e))));
     }
   }
 
@@ -200,17 +201,13 @@ class HouseholdScreen extends ConsumerWidget {
       await ref.read(householdServiceProvider).remove(member.id);
       ref.invalidate(householdProvider);
     } on DioException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(_detail(e))));
+      messenger.showSnackBar(SnackBar(content: Text(messageFor(e))));
     }
   }
 
   /// Prefer the backend's message: it distinguishes a full household from a
   /// bad code from a plan that doesn't include sharing.
-  String _detail(DioException e) {
-    final data = e.response?.data;
-    if (data is Map && data['detail'] is String) return data['detail'] as String;
-    return 'Something went wrong. Try again.';
-  }
+
 }
 
 class _Explainer extends StatelessWidget {
