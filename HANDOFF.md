@@ -433,6 +433,26 @@
 > (2) the household entity for Family (invites, shared item ownership, re-scoping items from user to
 > household, billing owner) — a big one; (3) billing, since nothing sets `tier` yet (admin/manual).
 
+> **Update 2026-08-07 — Billing (D47), code-complete on `feat/billing-subscriptions`.**
+> Pro and Family are now buyable: native IAP on both stores via RevenueCat, `users.tier` derived from
+> a `subscriptions` table, a paywall in the app, and ads following the server's tier. **Family was
+> re-priced to 3 mailboxes shared across the household** — at 2-per-member it billed 4 to Pro's 2, so
+> it cost ~2x Pro to serve while priced under 2x. Pro $6.99/mo · $69/yr, Family $9.99/mo · $99/yr,
+> 7-day trial.
+> **The security audit returned four BLOCKs, all reproduced and all fixed** (`cabc421`): one purchase
+> entitled two accounts when ownership moved (only the new owner was re-derived); the orphan claim was
+> a blind write, so two people restoring the same anonymous purchase both ended up paid; a missing
+> `event_timestamp_ms` became "now" and let a replayed purchase undo a refund; and the mailbox cap
+> locked the caller's own row instead of the plan owner's, so two household members adding
+> concurrently exceeded the cap. Backend **453 tests**, frontend **142**.
+> **Testing before the stores:** `python -m api.db.set_tier <email> <tier> --forever --reason "..."`
+> writes an override the billing projection cannot clobber. A Firebase App Distribution build
+> **cannot** make Google Play test purchases at all — that needs a Play internal testing track; iOS
+> sandbox purchases work from TestFlight.
+> **BLOCKING BEFORE MERGE:** `REVENUECAT_WEBHOOK_SECRET` must exist in Railway (>=32 chars) or
+> **production will refuse to boot** — deliberate, since that secret is the only thing between the
+> internet and a free Family tier.
+
 > **Update 2026-07-28 — Android OAuth redirect FIXED (D43) + E0 pre-consent disclosure built.**
 > The long-standing "Chrome finishes Google sign-in but never returns to the app" bug is solved, with
 > the root cause **confirmed on the PM's own S25 Ultra** rather than inferred. flutter_web_auth_2's
