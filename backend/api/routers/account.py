@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import get_current_user
@@ -514,7 +514,29 @@ async def link_billing(
         )
         for sub in rows.scalars():
             if sub.user_id is None:
-                sub.user_id = user.id
+                # Compare-and-swap, not a blind write: two people restoring the
+                # same anonymous purchase (two parents on one device is the
+                # ordinary way this happens) could both read it as unowned, and
+                # the later write would silently take a row the earlier claim
+                # had already been credited for — leaving BOTH accounts paid
+                # from one subscription.
+                claimed = await db.execute(
+                    update(Subscription)
+                    .where(
+                        Subscription.id == sub.id,
+                        Subscription.user_id.is_(None),
+                    )
+                    .values(user_id=user.id)
+                )
+                if claimed.rowcount == 0:
+                    # Someone got there first. Re-read to see who.
+                    await db.refresh(sub)
+                    if sub.user_id != user.id:
+                        auth_throttle.record_failure(client_ip, user.email)
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="Those purchases belong to another account.",
+                        )
             elif sub.user_id != user.id:
                 auth_throttle.record_failure(client_ip, user.email)
                 _log.error(

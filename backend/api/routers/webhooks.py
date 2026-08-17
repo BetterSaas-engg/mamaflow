@@ -121,12 +121,39 @@ async def revenuecat_webhook(
     try:
         await db.commit()
     except IntegrityError:
-        # Already handled. RevenueCat retries at-least-once, so this is the
-        # normal path for a redelivery, not an error.
+        # We have seen this event id before. Usually a redelivery of something
+        # already applied — the normal path, not an error.
         await db.rollback()
-        return {"status": "duplicate"}
+        rows = await db.execute(
+            select(ProcessedStoreEvent).where(
+                ProcessedStoreEvent.event_id == event_id
+            )
+        )
+        prior = rows.scalar_one_or_none()
+        if prior is None or prior.outcome != "pending":
+            return {"status": "duplicate"}
+        # Still "pending" means a previous attempt claimed the event and then
+        # died before applying it — a crash, or two deliveries racing to create
+        # the same brand-new subscription. Without this the retry would be
+        # dismissed as a duplicate and the event lost for good, which is the
+        # one real cost of claiming before applying. Retry onto the same marker.
+        _log.warning(
+            "billing webhook: retrying event %s left pending by an earlier "
+            "attempt",
+            event_id,
+        )
+        marker = prior
 
-    outcome, sub, user = await apply_event(db, event, expected_env)
+    try:
+        outcome, sub, user = await apply_event(db, event, expected_env)
+    except IntegrityError:
+        # Two deliveries created the same (store, store_original_id) at once.
+        # The marker stays "pending", so RevenueCat's retry re-applies rather
+        # than being dismissed as a duplicate. 500 is correct here: it IS
+        # transient, and the retry is what completes it.
+        await db.rollback()
+        _log.warning("billing webhook: concurrent create for event %s", event_id)
+        raise
     marker.outcome = outcome
     if sub is not None:
         marker.subscription_id = sub.id

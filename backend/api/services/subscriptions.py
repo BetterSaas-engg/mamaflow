@@ -291,9 +291,13 @@ async def apply_event(db: AsyncSession, event: dict, expected_environment: str):
     if not original_id:
         return "ignored_unknown_type", None, None
 
-    event_at = _ms(event.get("event_timestamp_ms")) or datetime.datetime.now(
-        datetime.timezone.utc
-    )
+    # A missing/malformed timestamp used to become "now", which always beats
+    # whatever is stored — so a replayed purchase could silently undo a refund.
+    # "Unknown when" must be the most conservative reading, not the newest
+    # (the D34 coerce-don't-reject stance means degrade safely, not optimistically).
+    # None here means "no ordering information"; it is treated as stale against
+    # any subscription that already has an event, and as now for a brand-new one.
+    event_at = _ms(event.get("event_timestamp_ms"))
     user = await _resolve_user(db, app_user_id, store, original_id)
 
     rows = await db.execute(
@@ -305,7 +309,7 @@ async def apply_event(db: AsyncSession, event: dict, expected_environment: str):
     sub = rows.scalar_one_or_none()
 
     if sub is not None and sub.last_event_at is not None:
-        if event_at <= _aware(sub.last_event_at):
+        if event_at is None or event_at <= _aware(sub.last_event_at):
             # Out of order. Ignore rather than apply — a later event has
             # already been folded in, and re-applying an older one would undo
             # it. Recorded so a redelivery does not repeat the no-op forever.
@@ -321,6 +325,8 @@ async def apply_event(db: AsyncSession, event: dict, expected_environment: str):
     new_status = status_for_event(event_type, cancel_reason)
 
     if sub is None:
+        # Nothing to be stale against, so an absent timestamp is harmless here.
+        event_at = event_at or datetime.datetime.now(datetime.timezone.utc)
         sub = Subscription(
             app_user_id=app_user_id,
             store=store,
@@ -339,6 +345,11 @@ async def apply_event(db: AsyncSession, event: dict, expected_environment: str):
         if new_status is not None:
             sub.status = new_status
 
+    # Ownership can move (a TRANSFER, or a later event resolving to a different
+    # account). Only the NEW owner used to be re-derived, so the previous one
+    # kept a paid tier for a subscription they no longer held — one purchase
+    # entitling two accounts, indefinitely.
+    previous_owner_id = sub.user_id
     sub.user_id = user.id if user is not None else sub.user_id
     if app_user_id:
         sub.app_user_id = app_user_id
@@ -370,6 +381,20 @@ async def apply_event(db: AsyncSession, event: dict, expected_environment: str):
     await db.commit()
     if user is not None:
         await recompute_tier(db, user, expected_environment=expected_environment)
+    if previous_owner_id is not None and previous_owner_id != sub.user_id:
+        # The account that lost the subscription must be re-derived too, or it
+        # keeps the tier forever — nothing else ever revisits it, and the
+        # sweeper only scans subscriptions a user still owns.
+        previous = await db.get(User, previous_owner_id)
+        if previous is not None:
+            await recompute_tier(
+                db, previous, expected_environment=expected_environment
+            )
+            _log.info(
+                "billing: subscription moved from user %s to %s",
+                previous_owner_id,
+                sub.user_id,
+            )
     return ("applied" if user is not None else "unresolved_user"), sub, user
 
 
@@ -455,6 +480,28 @@ async def sweep_lapsed(
             )
             if before != after:
                 moved += 1
+        # The sweeper's blind spot, made visible. An ACTIVE row with no expiry
+        # entitles indefinitely (is_entitling treats "no known expiry" as
+        # entitling while active), and the query above cannot see it because it
+        # filters on current_period_end. That is correct for a genuine
+        # non-expiring purchase — but we sell only subscriptions, so in practice
+        # it means a payload that never carried an expiry. Report it rather than
+        # revoke: cutting off a payer on a parsing bug is the worse error.
+        stuck = await db.execute(
+            select(Subscription.id).where(
+                Subscription.deleted_at.is_(None),
+                Subscription.current_period_end.is_(None),
+                Subscription.status == "active",
+            )
+        )
+        stuck_ids = [r[0] for r in stuck]
+        if stuck_ids:
+            _log.warning(
+                "billing sweep: %d active subscription(s) have no expiry and "
+                "cannot lapse — check the webhook payload mapping: %s",
+                len(stuck_ids),
+                stuck_ids[:10],
+            )
     if moved:
         # Counts only — never who or what they bought.
         _log.info("billing sweep: %d user(s) changed tier", moved)

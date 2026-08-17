@@ -436,3 +436,148 @@ async def test_every_event_is_recorded_with_its_outcome(client, db):
         for row in (await db.execute(select(ProcessedStoreEvent))).scalars()
     }
     assert outcomes == {"applied", "ignored_sandbox"}
+
+
+# --- Audit follow-ups (2026-08-07 security review) ---
+
+
+async def test_a_transfer_downgrades_the_previous_owner(client, db):
+    """One purchase must not entitle two accounts.
+
+    Ownership moves (a TRANSFER, or simply a later event resolving to a
+    different user), but only the NEW owner was ever re-derived — so the old
+    one kept a paid tier they no longer had a subscription for, forever."""
+    old, _ = await _user(db, "old@example.com")
+    new, _ = await _user(db, "new@example.com")
+    await client.post(
+        "/api/v1/webhooks/revenuecat",
+        headers=_hook(),
+        json=_event(app_user_id=str(old.id)),
+    )
+    assert await _tier(db, old) == "pro"
+
+    await client.post(
+        "/api/v1/webhooks/revenuecat",
+        headers=_hook(),
+        json=_event(
+            app_user_id=str(new.id),
+            type="TRANSFER",
+            event_timestamp_ms=NOW_MS + 1000,
+        ),
+    )
+
+    assert await _tier(db, new) == "pro"
+    assert await _tier(db, old) == "free", "old owner kept a plan they no longer own"
+
+
+async def test_an_event_with_no_timestamp_cannot_undo_a_later_one(client, db):
+    """A missing timestamp was coerced to "now", which always beats the stored
+    one — so a replayed purchase silently reinstated a refunded subscription.
+    "Unknown time" must be the most conservative reading, not the newest."""
+    user, _ = await _user(db)
+    purchase = _event(app_user_id=str(user.id))
+    await client.post("/api/v1/webhooks/revenuecat", headers=_hook(), json=purchase)
+    await client.post(
+        "/api/v1/webhooks/revenuecat",
+        headers=_hook(),
+        json=_event(
+            app_user_id=str(user.id),
+            type="CANCELLATION",
+            cancel_reason="REFUND",
+            event_timestamp_ms=NOW_MS + 5000,
+        ),
+    )
+    assert await _tier(db, user) == "free"
+
+    replay = _event(app_user_id=str(user.id))
+    replay["event"].pop("event_timestamp_ms")
+    resp = await client.post(
+        "/api/v1/webhooks/revenuecat", headers=_hook(), json=replay
+    )
+
+    assert resp.json()["status"] == "ignored_stale"
+    assert await _tier(db, user) == "free", "a refund was undone by a timestampless replay"
+
+
+async def test_a_first_event_with_no_timestamp_is_still_applied(client, db):
+    """Partner test: with nothing to be stale against, a missing timestamp must
+    not block a genuine first purchase."""
+    user, _ = await _user(db)
+    first = _event(app_user_id=str(user.id))
+    first["event"].pop("event_timestamp_ms")
+
+    resp = await client.post(
+        "/api/v1/webhooks/revenuecat", headers=_hook(), json=first
+    )
+
+    assert resp.json()["status"] == "applied"
+    assert await _tier(db, user) == "pro"
+
+
+async def test_claiming_an_already_owned_orphan_does_not_move_it(client, db):
+    """The claim is a compare-and-swap: it may only take a row that is still
+    unowned. A blind write let a late claim overwrite a completed one, leaving
+    both accounts paid from a single subscription."""
+    await client.post(
+        "/api/v1/webhooks/revenuecat",
+        headers=_hook(),
+        json=_event(app_user_id="$RCAnonymousID:shared"),
+    )
+    first, first_token = await _user(db, "first@example.com")
+    second, second_token = await _user(db, "second@example.com")
+
+    await client.post(
+        "/api/v1/account/billing/link",
+        headers=_auth(first_token),
+        json={"app_user_id": "$RCAnonymousID:shared"},
+    )
+    resp = await client.post(
+        "/api/v1/account/billing/link",
+        headers=_auth(second_token),
+        json={"app_user_id": "$RCAnonymousID:shared"},
+    )
+
+    assert resp.status_code == 409
+    assert await _tier(db, first) == "pro"
+    assert await _tier(db, second) == "free"
+
+
+async def test_an_event_left_pending_by_a_crash_is_retried_not_dropped(client, db):
+    """Claiming the event id before applying it means a crash in between loses
+    the event — the one real cost of that ordering. A retry must therefore
+    re-apply a marker still marked pending, rather than dismissing it as a
+    duplicate and dropping a paid upgrade for good."""
+    user, _ = await _user(db)
+    payload = _event(app_user_id=str(user.id))
+    event_id = payload["event"]["id"]
+    # Exactly the state a crash between claim and apply leaves behind.
+    db.add(
+        ProcessedStoreEvent(
+            event_id=event_id,
+            event_type="INITIAL_PURCHASE",
+            app_user_id=str(user.id),
+            environment="SANDBOX",
+            outcome="pending",
+        )
+    )
+    await db.commit()
+
+    resp = await client.post(
+        "/api/v1/webhooks/revenuecat", headers=_hook(), json=payload
+    )
+
+    assert resp.json()["status"] == "applied"
+    assert await _tier(db, user) == "pro"
+
+
+async def test_a_completed_event_is_still_a_duplicate(client, db):
+    """Partner test — the retry path must not re-apply everything forever."""
+    user, _ = await _user(db)
+    payload = _event(app_user_id=str(user.id))
+
+    await client.post("/api/v1/webhooks/revenuecat", headers=_hook(), json=payload)
+    second = await client.post(
+        "/api/v1/webhooks/revenuecat", headers=_hook(), json=payload
+    )
+
+    assert second.json()["status"] == "duplicate"

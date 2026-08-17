@@ -179,8 +179,14 @@ async def ensure_connection(
     # concurrent adds of DIFFERENT addresses could both read "under the cap"
     # and both commit. (The unique index only catches the same-address race.)
     # No-op on SQLite, which serializes writes anyway.
+    # Lock the PLAN OWNER's row, not the caller's. The cap is household-wide,
+    # so locking your own row means two members adding mailboxes at once never
+    # contend — each holds a different lock, both read the same count, and the
+    # household lands over its cap. Locking the owner gives every member of a
+    # plan one shared lock. No-op on SQLite, which serializes writes anyway.
+    owner = await plan_owner(db, user)
     await db.execute(
-        select(User.id).where(User.id == user.id).with_for_update()
+        select(User.id).where(User.id == owner.id).with_for_update()
     )
     current = await plan_connection_count(db, user)
     tier = await plan_tier(db, user)

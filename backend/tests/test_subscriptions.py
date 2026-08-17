@@ -331,3 +331,27 @@ async def test_the_sweeper_does_not_touch_an_override(db, session_factory):
 
     await db.refresh(user)
     assert effective_tier(user, NOW) == FAMILY
+
+
+async def test_the_sweeper_reports_rows_it_structurally_cannot_lapse(
+    db, session_factory, caplog
+):
+    """An active row with no expiry entitles indefinitely, and the sweep query
+    filters on current_period_end so it can never see it. We sell only
+    subscriptions, so in practice that means a payload mapping bug — report it
+    rather than revoke, because cutting off a payer over a parsing bug is the
+    worse error."""
+    import logging
+
+    from api.services.subscriptions import sweep_lapsed
+
+    user = await get_or_create_user(db, "noexpiry@example.com")
+    db.add(
+        _sub(user_id=user.id, app_user_id=str(user.id), current_period_end=None)
+    )
+    await db.commit()
+
+    with caplog.at_level(logging.WARNING):
+        await sweep_lapsed(session_factory, now=NOW)
+
+    assert "no expiry" in caplog.text
