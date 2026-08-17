@@ -4,16 +4,20 @@ Deliberately one module with no DB or HTTP knowledge, so the limits can be read
 and tested in isolation and there is exactly one place to change when pricing
 moves. Every caller asks this module; nothing hardcodes a number.
 
-Tiers (D44):
+Tiers (D44, revised D47):
   free    1 mailbox,  1 member   — ad-supported
   pro     2 mailboxes, 1 member  — ad-free
-  family  2 mailboxes PER MEMBER, 2 members (e.g. both parents), ad-free
+  family  3 mailboxes, 2 members (e.g. both parents), ad-free
 
-Note the shape: the mailbox cap is always PER USER (1 / 2 / 2). Family's extra
-allowance is a second *member* in the household, each with their own login and
-their own 2 mailboxes — not a bigger pile of mailboxes on one account. That
-keeps the cap check identical in all three tiers and confines the household
-concept to member management.
+**`mailboxes` is the cap across the whole PLAN, not per person.** For a solo
+account the plan is just them; for a Family the three are shared between the two
+parents however they like.
+
+Revised from "2 per member" (D47): billing 4 mailboxes on Family against Pro's 2
+made Family cost ~2x Pro to serve, so at any price under 2x Pro the premium tier
+earned less per user than the mid tier — backwards. Three shared mailboxes is
+1.5x Pro's cost and matches how households actually look: two adults with a main
+inbox each, plus one shared or work address.
 """
 
 import dataclasses
@@ -30,7 +34,8 @@ class Entitlements:
     """What one user on this tier may do."""
 
     tier: str
-    # Mailboxes this ONE user may connect (their own logins/app passwords).
+    # Mailboxes across the whole PLAN — shared by every member of the
+    # household, not a per-person allowance.
     mailboxes: int
     # Adults who can share the household, each with their own account.
     members: int
@@ -41,10 +46,27 @@ class Entitlements:
 _TIERS: dict[str, Entitlements] = {
     FREE: Entitlements(tier=FREE, mailboxes=1, members=1, ads=True),
     PRO: Entitlements(tier=PRO, mailboxes=2, members=1, ads=False),
-    FAMILY: Entitlements(tier=FAMILY, mailboxes=2, members=2, ads=False),
+    FAMILY: Entitlements(tier=FAMILY, mailboxes=3, members=2, ads=False),
 }
 
 TIERS = tuple(_TIERS)
+
+# Ascending generosity. Declared once so nothing hardcodes an ordering, and so
+# adding a tier is a single edit here.
+TIER_RANK = (FREE, PRO, FAMILY)
+
+
+def higher_tier(a: str | None, b: str | None) -> str:
+    """The more generous of two tiers.
+
+    Order-independent by construction, which is what makes it safe to combine
+    tiers that arrive from different places (a household owner and a member, or
+    two overlapping subscriptions) without caring which was seen first.
+    Unrecognised values normalise to free via entitlements_for.
+    """
+    rank_a = TIER_RANK.index(entitlements_for(a).tier)
+    rank_b = TIER_RANK.index(entitlements_for(b).tier)
+    return TIER_RANK[max(rank_a, rank_b)]
 
 
 def entitlements_for(tier: str | None) -> Entitlements:
@@ -67,6 +89,6 @@ def member_limit(tier: str | None) -> int:
 
 
 def can_connect_another_mailbox(tier: str | None, current_count: int) -> bool:
-    """Whether a user on `tier` who already has `current_count` mailboxes may
-    connect one more."""
+    """Whether a plan on `tier` already using `current_count` mailboxes may
+    connect one more. `current_count` is the count across the whole plan."""
     return current_count < mailbox_limit(tier)

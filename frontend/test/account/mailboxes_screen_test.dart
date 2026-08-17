@@ -72,7 +72,7 @@ void main() {
     expect(tile.enabled, isTrue);
   });
 
-  testWidgets('at the limit, explains the limit instead of dead-ending',
+  testWidgets('at the limit, offers a way out instead of dead-ending',
       (tester) async {
     await tester.pumpWidget(_screen(
       plan: _plan(connected: 1, limit: 1, canAdd: false),
@@ -82,11 +82,20 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // Says what the plan includes AND what the user can do about it — there
-    // is no purchase flow yet, so "upgrade" alone would be a dead end.
+    // Says what the plan includes AND gives an action. Now that a paywall
+    // exists the tile is TAPPABLE — a disabled tile was the right answer only
+    // while there was nothing to upgrade to.
     expect(find.textContaining('Free plan includes 1 email account'),
         findsOneWidget);
-    expect(find.textContaining('Disconnect one'), findsOneWidget);
+    expect(find.textContaining('Upgrade for more, or disconnect one'),
+        findsOneWidget);
+    final tile = tester.widget<ListTile>(
+      find.ancestor(
+        of: find.text('Add another email'),
+        matching: find.byType(ListTile),
+      ),
+    );
+    expect(tile.onTap, isNotNull, reason: 'at-cap tile must lead somewhere');
   });
 
   testWidgets('an empty state says why nothing is being scanned',

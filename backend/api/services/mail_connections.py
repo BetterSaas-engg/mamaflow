@@ -23,7 +23,7 @@ from api.auth.token_store import delete_other_tokens, delete_token
 from api.models.mail_connection import MailConnection
 from api.models.user import User
 from api.services.entitlements import can_connect_another_mailbox, mailbox_limit
-from api.services.households import plan_owner
+from api.services.households import members, plan_owner, plan_tier
 
 
 class MailboxAlreadyConnected(Exception):
@@ -78,7 +78,37 @@ async def list_connections(db: AsyncSession, user_id) -> list[MailConnection]:
 
 
 async def connection_count(db: AsyncSession, user_id) -> int:
+    """Mailboxes belonging to THIS user.
+
+    Deliberately per-user and left that way: auto_sync uses it to answer "does
+    this user have a mailbox to sync", where household-scoping would make a
+    mailbox-less member look syncable and waste a run. The cap uses
+    plan_connection_count instead.
+    """
     return len(await list_connections(db, user_id))
+
+
+async def plan_connection_count(db: AsyncSession, user: User) -> int:
+    """Mailboxes across the whole PLAN — every household member, or just this
+    user when they are solo.
+
+    The cap is plan-wide (D47: Family is 3 shared, not 3 each). Counting
+    per-user while reading a household-scoped limit gave a Family household 3
+    mailboxes EACH — twice what the tier is priced to serve.
+    """
+    owner = await plan_owner(db, user)
+    if owner.household_id is None:
+        return await connection_count(db, user.id)
+    member_ids = [m.id for m in await members(db, owner.household_id)]
+    if not member_ids:
+        return await connection_count(db, user.id)
+    rows = await db.execute(
+        select(MailConnection.id).where(
+            MailConnection.user_id.in_(member_ids),
+            MailConnection.deleted_at.is_(None),
+        )
+    )
+    return len(list(rows))
 
 
 async def get_connection(
@@ -149,11 +179,17 @@ async def ensure_connection(
     # concurrent adds of DIFFERENT addresses could both read "under the cap"
     # and both commit. (The unique index only catches the same-address race.)
     # No-op on SQLite, which serializes writes anyway.
+    # Lock the PLAN OWNER's row, not the caller's. The cap is household-wide,
+    # so locking your own row means two members adding mailboxes at once never
+    # contend — each holds a different lock, both read the same count, and the
+    # household lands over its cap. Locking the owner gives every member of a
+    # plan one shared lock. No-op on SQLite, which serializes writes anyway.
+    owner = await plan_owner(db, user)
     await db.execute(
-        select(User.id).where(User.id == user.id).with_for_update()
+        select(User.id).where(User.id == owner.id).with_for_update()
     )
-    current = await connection_count(db, user.id)
-    tier = (await plan_owner(db, user)).tier
+    current = await plan_connection_count(db, user)
+    tier = await plan_tier(db, user)
     if not can_connect_another_mailbox(tier, current):
         raise MailboxLimitReached(tier, mailbox_limit(tier))
 
@@ -211,9 +247,9 @@ async def mailbox_usage(db: AsyncSession, user: User) -> tuple[int, int, bool]:
     the slot is released by an action the user can see and undo, not by a
     failure happening somewhere they can't observe.
     """
-    connected = await connection_count(db, user.id)
-    # A household member inherits the owner's plan: one household, one bill.
-    # Reading the member's own tier would show a Family member the free cap.
-    tier = (await plan_owner(db, user)).tier
+    connected = await plan_connection_count(db, user)
+    # One question, one answer: plan_tier resolves the household and any
+    # override, so the number shown and the number enforced cannot disagree.
+    tier = await plan_tier(db, user)
     limit = mailbox_limit(tier)
     return connected, limit, can_connect_another_mailbox(tier, connected)

@@ -27,6 +27,20 @@ class User(TimestampMixin, Base):
     tier: Mapped[str] = mapped_column(
         nullable=False, default="free", server_default="free"
     )
+    # A deliberate tier grant that outranks the subscription projection (D47):
+    # testers before the app is on the stores, support comps, and locking out a
+    # serial refunder. Separate columns rather than writing `tier` directly, so
+    # a webhook cannot silently revert a grant and a tester's plan does not
+    # evaporate the moment any store event fires.
+    tier_override: Mapped[str | None] = mapped_column(nullable=True)
+    # NULL = no expiry. Expiring is the default for support grants (an override
+    # left on a real customer means their genuine cancellation never takes
+    # effect); NULL is for the pre-launch testing window, where a 30-day clock
+    # would run out mid-test.
+    tier_override_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    tier_override_reason: Mapped[str | None] = mapped_column(nullable=True)
     # The household this user belongs to, if any (D46). NULL = solo account,
     # which is every user today. Membership is here rather than in a join table
     # because a user belongs to at most one household — the Family tier is two

@@ -6,6 +6,7 @@ from api.models.item import Item
 from api.models.mail_connection import MailConnection
 from api.models.sender_allowlist import SenderAllowlist
 from api.models.sender_blocklist import SenderBlocklist
+from api.models.subscription import ProcessedStoreEvent, Subscription
 from api.models.synced_message import SyncedMessage
 from api.models.user import User
 
@@ -18,7 +19,9 @@ __all__ = [
     "Item",
     "MailConnection",
     "SenderAllowlist",
+    "ProcessedStoreEvent",
     "SenderBlocklist",
+    "Subscription",
     "SyncedMessage",
     "User",
 ]

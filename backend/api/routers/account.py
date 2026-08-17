@@ -5,6 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.dependencies import get_current_user
@@ -12,9 +13,11 @@ from api.auth.imap_auth import ImapAuthRequest, verify_and_store_imap_mailbox
 from api.auth.oauth import exchange_code_pkce
 from api.auth.token_store import store_token
 from api.db.session import get_db
+from api.models.subscription import Subscription
 from api.models.user import User
 from api.services.account import delete_account
 from api.services.entitlements import entitlements_for
+from api.routers.webhooks import _expected_environment
 from api.services import auth_throttle
 from api.services.households import (
     AlreadyInHousehold,
@@ -27,9 +30,11 @@ from api.services.households import (
     members,
     pending_invites,
     plan_owner,
+    plan_tier,
     remove_member,
     revoke_invite,
 )
+from api.services.subscriptions import recompute_tier
 from api.services.users import normalize_email
 from api.services.mail_connections import (
     MailboxAlreadyConnected,
@@ -85,8 +90,9 @@ async def read_me(
     Counts come from live connection rows, so the number the client shows and
     the number the cap is enforced against are the same one.
     """
-    # Members inherit the household owner's plan.
-    ent = entitlements_for((await plan_owner(db, user)).tier)
+    # Members inherit the household owner's plan (or keep their own, if they
+    # are the payer) — plan_tier is the one place that decides.
+    ent = entitlements_for(await plan_tier(db, user))
     connected, limit, can_add = await mailbox_usage(db, user)
     return AccountMe(
         id=str(user.id),
@@ -307,7 +313,7 @@ async def read_household(
     db: AsyncSession = Depends(get_db),
 ) -> HouseholdView:
     owner = await plan_owner(db, user)
-    limit = entitlements_for(owner.tier).members
+    limit = entitlements_for(await plan_tier(db, user)).members
     if user.household_id is None:
         return HouseholdView(
             exists=False,
@@ -460,3 +466,90 @@ async def revoke_household_invite(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found"
         )
+
+
+# --- Billing linkage (D47) ---
+
+
+class LinkBillingRequest(BaseModel):
+    app_user_id: str
+
+
+@router.post("/billing/link", response_model=AccountMe)
+async def link_billing(
+    payload: LinkBillingRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AccountMe:
+    """Attach purchases made under `app_user_id` to the signed-in account.
+
+    This is also "Restore purchases", and the app should call it on every cold
+    start after login — it is the cheapest reconciliation there is.
+
+    Orphans are expected: RevenueCat mints `$RCAnonymousID:…` before login, so
+    a purchase made on the paywall before signing in has no user attached yet.
+
+    **It refuses a subscription already owned by someone else.** Without that
+    rule, knowing another user's app_user_id would be an entitlement-theft
+    endpoint — and the identifier is chosen by the caller, so it is throttled
+    for the same reason.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = auth_throttle.check(client_ip, user.email)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again in a few minutes.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    app_user_id = payload.app_user_id.strip()
+    if app_user_id:
+        rows = await db.execute(
+            select(Subscription).where(
+                Subscription.app_user_id == app_user_id,
+                Subscription.deleted_at.is_(None),
+            )
+        )
+        for sub in rows.scalars():
+            if sub.user_id is None:
+                # Compare-and-swap, not a blind write: two people restoring the
+                # same anonymous purchase (two parents on one device is the
+                # ordinary way this happens) could both read it as unowned, and
+                # the later write would silently take a row the earlier claim
+                # had already been credited for — leaving BOTH accounts paid
+                # from one subscription.
+                claimed = await db.execute(
+                    update(Subscription)
+                    .where(
+                        Subscription.id == sub.id,
+                        Subscription.user_id.is_(None),
+                    )
+                    .values(user_id=user.id)
+                )
+                if claimed.rowcount == 0:
+                    # Someone got there first. Re-read to see who.
+                    await db.refresh(sub)
+                    if sub.user_id != user.id:
+                        auth_throttle.record_failure(client_ip, user.email)
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="Those purchases belong to another account.",
+                        )
+            elif sub.user_id != user.id:
+                auth_throttle.record_failure(client_ip, user.email)
+                _log.error(
+                    "billing link: user %s tried to claim a subscription owned "
+                    "by %s",
+                    user.id,
+                    sub.user_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Those purchases belong to another account.",
+                )
+        await db.commit()
+
+    await recompute_tier(db, user, expected_environment=_expected_environment())
+    return await read_me(user=user, db=db)

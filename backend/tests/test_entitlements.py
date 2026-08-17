@@ -32,11 +32,16 @@ def test_pro_gets_two_mailboxes_and_no_ads():
     assert ent.ads is False
 
 
-def test_family_gets_two_mailboxes_per_member_and_two_members():
-    """The cap is per USER in every tier; Family's extra allowance is a second
-    member (each parent has their own login and their own 2 mailboxes)."""
+def test_family_gets_three_shared_mailboxes_and_two_members():
+    """`mailboxes` is the cap across the whole PLAN, not per person (D47).
+
+    At 2-per-member Family billed 4 mailboxes to Pro's 2, so it cost ~2x Pro to
+    serve — a premium tier with worse unit economics than the mid tier. Three
+    shared is 1.5x Pro and matches how households look: an inbox each plus one
+    shared or work address.
+    """
     ent = entitlements_for(FAMILY)
-    assert ent.mailboxes == 2
+    assert ent.mailboxes == 3
     assert ent.members == 2
     assert ent.ads is False
 
@@ -57,7 +62,8 @@ def test_cap_blocks_the_mailbox_after_the_limit():
     assert can_connect_another_mailbox(FREE, 1) is False
     assert can_connect_another_mailbox(PRO, 1) is True
     assert can_connect_another_mailbox(PRO, 2) is False
-    assert can_connect_another_mailbox(FAMILY, 2) is False
+    assert can_connect_another_mailbox(FAMILY, 2) is True
+    assert can_connect_another_mailbox(FAMILY, 3) is False
 
 
 def test_cap_holds_if_a_count_somehow_exceeds_the_limit():

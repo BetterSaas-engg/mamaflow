@@ -6,6 +6,7 @@ import '../auth/imap_provider_configs.dart';
 import '../theme/tokens.dart';
 import 'account_providers.dart';
 import 'mailboxes.dart';
+import 'paywall_screen.dart';
 
 /// Manage the mailboxes feeding the calendar, and show what the plan allows.
 ///
@@ -154,9 +155,16 @@ class _AddMailboxTile extends ConsumerWidget {
         subtitle: Text(
           'Your ${plan.tierLabel} plan includes ${plan.mailboxLimit} '
           '${plan.mailboxLimit == 1 ? 'email account' : 'email accounts'}. '
-          'Disconnect one to connect a different one.',
+          'Upgrade for more, or disconnect one.',
         ),
-        enabled: false,
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          await Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const PaywallScreen()),
+          );
+          ref.invalidate(accountPlanProvider);
+          ref.invalidate(mailboxListProvider);
+        },
       );
     }
     return ListTile(

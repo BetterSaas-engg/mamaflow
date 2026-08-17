@@ -180,8 +180,8 @@ async def test_me_reflects_a_paid_tier(client, db, monkeypatch):
     assert body["tier"] == "family"
     assert body["ads_enabled"] is False
     assert body["member_limit"] == 2
-    assert body["mailboxes"]["limit"] == 2
-    assert body["mailboxes"]["can_add_another"] is True  # 1 of 2 used
+    assert body["mailboxes"]["limit"] == 3  # shared across the household (D47)
+    assert body["mailboxes"]["can_add_another"] is True  # 1 of 3 used
 
 
 async def test_me_degrades_an_unknown_tier_to_free(client, db, monkeypatch):

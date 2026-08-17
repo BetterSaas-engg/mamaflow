@@ -11,6 +11,7 @@ from api.routers.account import router as account_router
 from api.routers.devices import router as devices_router
 from api.routers.items import router as items_router
 from api.routers.sync import router as sync_router
+from api.routers.webhooks import router as webhooks_router
 from api.services.reminder_scheduler import start_scheduler, stop_scheduler
 
 
@@ -45,6 +46,7 @@ app.include_router(auth_router)
 app.include_router(imap_auth_router)
 app.include_router(sync_router)
 app.include_router(items_router)
+app.include_router(webhooks_router)
 app.include_router(devices_router)
 app.include_router(account_router)
 

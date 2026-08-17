@@ -17,7 +17,13 @@ def test_development_allows_weak_secret():
 
 
 def test_strong_secret_accepted_in_production():
-    s = Settings(environment="production", secret_key="x" * 48, _env_file=None)
+    s = Settings(
+        environment="production",
+        secret_key="x" * 48,
+        # Production also requires a billing secret now — see below.
+        revenuecat_webhook_secret="z" * 40,
+        _env_file=None,
+    )
     assert s.environment == "production"
 
 
@@ -35,6 +41,7 @@ def test_a_short_secret_warns_in_production_but_still_boots(monkeypatch, caplog)
     import logging
 
     monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("REVENUECAT_WEBHOOK_SECRET", "x" * 40)
     monkeypatch.setenv("SECRET_KEY", "short-but-not-a-placeholder")
     with caplog.at_level(logging.WARNING):
         s = Settings(_env_file=None)
@@ -47,6 +54,7 @@ def test_a_long_secret_is_silent(monkeypatch, caplog):
     import logging
 
     monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("REVENUECAT_WEBHOOK_SECRET", "x" * 40)
     monkeypatch.setenv("SECRET_KEY", "x" * 48)
     with caplog.at_level(logging.WARNING):
         Settings(_env_file=None)
@@ -59,6 +67,40 @@ def test_a_placeholder_secret_still_refuses_to_boot(monkeypatch):
     import pytest
 
     monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("REVENUECAT_WEBHOOK_SECRET", "x" * 40)
     monkeypatch.setenv("SECRET_KEY", "dev-secret-key")
     with pytest.raises(ValueError):
         Settings(_env_file=None)
+
+
+def test_production_refuses_to_boot_without_a_billing_secret(monkeypatch):
+    """The webhook secret is the ONLY thing between the internet and a free
+    family tier — there is no body signature to fall back on. A paid product
+    that boots with billing wide open is worse than one that doesn't boot."""
+    import pytest
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "y" * 48)
+    monkeypatch.delenv("REVENUECAT_WEBHOOK_SECRET", raising=False)
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)
+
+
+def test_production_refuses_a_short_billing_secret(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "y" * 48)
+    monkeypatch.setenv("REVENUECAT_WEBHOOK_SECRET", "short")
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)
+
+
+def test_staging_still_boots_without_billing(monkeypatch):
+    """Only production is hard-gated: a staging deploy without billing must
+    still start. The route 503s instead of accepting anything."""
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("SECRET_KEY", "y" * 48)
+    monkeypatch.delenv("REVENUECAT_WEBHOOK_SECRET", raising=False)
+
+    assert Settings(_env_file=None).revenuecat_webhook_secret == ""
